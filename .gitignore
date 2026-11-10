@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+**/node_modules/
+**/uploads/
+**/pagecrew-data/
+**/tmp/
+**/*.log
+**/*.enc
+**/*.bak
+*.zip
