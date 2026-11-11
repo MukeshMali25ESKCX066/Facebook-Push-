@@ -213,17 +213,23 @@ function recordUsage(campaign, action, usage) {
     const inputTokens = Number(usage.inputTokens || 0);
     const outputTokens = Number(usage.outputTokens || 0);
     const imageCount = Number(usage.imageCount || 0);
-    const inputRate = configuredRate("OPENAI_INPUT_USD_PER_MILLION_TOKENS");
-    const outputRate = configuredRate("OPENAI_OUTPUT_USD_PER_MILLION_TOKENS");
-    const imageRate = configuredRate("OPENAI_IMAGE_USD_PER_IMAGE");
+    const inputRate = configuredRate(usage.provider === "gemini"
+        ? "GEMINI_INPUT_USD_PER_MILLION_TOKENS"
+        : "OPENAI_INPUT_USD_PER_MILLION_TOKENS");
+    const outputRate = configuredRate(usage.provider === "gemini"
+        ? "GEMINI_OUTPUT_USD_PER_MILLION_TOKENS"
+        : "OPENAI_OUTPUT_USD_PER_MILLION_TOKENS");
+    const imageRate = configuredRate(usage.provider === "gemini" ? "GEMINI_IMAGE_USD_PER_IMAGE" : "OPENAI_IMAGE_USD_PER_IMAGE");
     const estimatedCostUsd = action === "image-generation"
         ? imageRate == null ? null : imageCount * imageRate
         : inputRate == null || outputRate == null ? null : (inputTokens * inputRate + outputTokens * outputRate) / 1000000;
     campaign.aiGenerationLog.unshift({
         action,
         status: "completed",
-        provider: usage.provider || "openai",
-        model: usage.model || process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
+        provider: usage.provider || "gemini",
+        model: usage.model || (action === "image-generation"
+            ? process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1"
+            : process.env.GEMINI_MODEL || "gemini-3.6-flash"),
         promptVersion: "pagecrew-social-v1",
         inputTokens,
         outputTokens,
@@ -243,14 +249,16 @@ function configuredRate(name) {
 }
 
 function recordFailure(campaign, action, error) {
+    const isImageGeneration = action === "image-generation";
+    const provider = String(process.env.AI_PROVIDER || "gemini").toLowerCase();
     campaign.aiGenerationLog = Array.isArray(campaign.aiGenerationLog) ? campaign.aiGenerationLog : [];
     campaign.aiGenerationLog.unshift({
         action,
         status: "failed",
-        provider: "openai",
-        model: action === "image-generation"
-            ? process.env.OPENAI_IMAGE_MODEL || "gpt-image-1"
-            : process.env.OPENAI_MODEL || "gpt-4o-mini",
+        provider,
+        model: isImageGeneration
+            ? process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1"
+            : process.env.GEMINI_MODEL || "gemini-3.6-flash",
         promptVersion: "pagecrew-social-v1",
         error: String(error.message || "AI request failed.").slice(0, 240),
         createdAt: new Date().toISOString()
@@ -450,8 +458,8 @@ router.post("/:id/ai/content/:contentId/images", async (req, res) => {
         campaign.updatedAt = content.updatedAt;
         await removeGeneratedImages(oldImages);
         recordUsage(campaign, "image-generation", {
-            provider: "openai",
-            model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
+            provider: "gemini",
+            model: process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1",
             imageCount: images.length
         });
         if (!persistCampaignOrRespond(res)) return;

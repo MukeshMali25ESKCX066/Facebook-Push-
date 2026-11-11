@@ -1,5 +1,7 @@
 "use strict";
 
+const { GoogleGenAI } = require("@google/genai");
+
 const TONES = ["Friendly", "Professional", "Emotional", "Informative", "Engaging"];
 const GOALS = ["Website Traffic", "Engagement", "Awareness"];
 const LENGTHS = ["Short", "Medium", "Long"];
@@ -134,62 +136,105 @@ function parseContentResponse(content, pages, settings) {
     });
 }
 
+function getActiveTextProvider() {
+    const provider = String(process.env.AI_PROVIDER || "gemini").trim().toLowerCase();
+    if (provider !== "gemini") {
+        const error = new Error(`Unsupported AI_PROVIDER "${provider}". Set AI_PROVIDER=gemini.`);
+        error.status = 503;
+        throw error;
+    }
+    return {
+        provider,
+        apiKey: String(process.env.GEMINI_API_KEY || "").trim(),
+        model: String(process.env.GEMINI_MODEL || "").trim() || "gemini-3.6-flash"
+    };
+}
+
+function providerError(cause, apiKey) {
+    const rawMessage = String(cause?.message || "");
+    const status = Number(cause?.status || cause?.statusCode || cause?.response?.status || 0);
+    const safeMessage = (apiKey ? rawMessage.replaceAll(apiKey, "[redacted]") : rawMessage)
+        .replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]")
+        .slice(0, 400);
+    let message;
+    let responseStatus = 502;
+
+    if (cause?.name === "TimeoutError" || cause?.name === "AbortError" || status === 408) {
+        message = "Gemini content generation timed out. Please try again.";
+        responseStatus = 504;
+    } else if (status === 429 || /quota|resource_exhausted|rate.?limit/i.test(rawMessage)) {
+        message = "Gemini quota or rate limit reached. Check the Google AI Studio project quota and billing, then try again.";
+        responseStatus = 429;
+    } else if (/api.?key.*(invalid|not valid)|invalid.*api.?key|api_key_invalid/i.test(rawMessage)) {
+        message = "Gemini rejected GEMINI_API_KEY. Check that the key is valid and enabled for the Gemini Developer API.";
+        responseStatus = 503;
+    } else if (status === 401 || status === 403) {
+        message = "Gemini denied the request. Check that GEMINI_API_KEY has Gemini API access and the selected model is available.";
+        responseStatus = 503;
+    } else if (status === 404) {
+        message = "The configured Gemini model is unavailable. Check GEMINI_MODEL and choose a supported model.";
+        responseStatus = 503;
+    } else if (status >= 500) {
+        message = "Gemini is temporarily unavailable. Please try again shortly.";
+    } else if (safeMessage) {
+        message = `Gemini request failed: ${safeMessage}`;
+    } else {
+        message = "Gemini content generation failed. Please try again.";
+    }
+
+    const error = new Error(message);
+    error.status = responseStatus;
+    return error;
+}
+
 async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-        const error = new Error("AI generation is not configured. Add OPENAI_API_KEY to backend/.env and restart the backend.");
+    const provider = getActiveTextProvider();
+    if (!provider.apiKey) {
+        const error = new Error("AI generation is not configured. Add GEMINI_API_KEY to the backend environment and restart the backend.");
         error.status = 503;
         throw error;
     }
 
     let response;
     try {
-        response = await fetchImpl("https://api.openai.com/v1/chat/completions", {
-            method: "POST",
-            signal: AbortSignal.timeout(90000),
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        const client = new GoogleGenAI({
+            apiKey: provider.apiKey,
+            httpOptions: { timeout: 90_000, fetch: fetchImpl }
+        });
+        const prompt = buildContentPrompt(campaign, pages, settings);
+        response = await client.models.generateContent({
+            model: provider.model,
+            contents: prompt[1].content,
+            config: {
+                systemInstruction: prompt[0].content,
                 temperature: 0.85,
-                max_completion_tokens: Math.min(12000, pages.length * 350),
-                response_format: { type: "json_object" },
-                messages: buildContentPrompt(campaign, pages, settings)
-            })
+                maxOutputTokens: Math.min(12000, pages.length * 350),
+                responseMimeType: "application/json"
+            }
         });
     } catch (cause) {
-        const error = new Error(cause.name === "TimeoutError" ? "AI text generation timed out. Please try again." : "AI text provider is unavailable. Please try again.");
-        error.status = cause.name === "TimeoutError" ? 504 : 502;
-        throw error;
-    }
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        const error = new Error(String(data.error?.message || `AI provider request failed (${response.status}).`).slice(0, 500));
-        error.status = response.status === 429 ? 429 : 502;
-        throw error;
+        throw providerError(cause, provider.apiKey);
     }
 
-    const content = data.choices?.[0]?.message?.content;
+    const content = response.text;
     if (typeof content !== "string") throw new Error("The AI provider returned an empty response. Please try again.");
     return {
         posts: parseContentResponse(content, pages, settings),
         usage: {
-            provider: "openai",
-            model: data.model || process.env.OPENAI_MODEL || "gpt-4o-mini",
-            inputTokens: Number(data.usage?.prompt_tokens || 0),
-            outputTokens: Number(data.usage?.completion_tokens || 0)
+            provider: provider.provider,
+            model: response.modelVersion || provider.model,
+            inputTokens: Number(response.usageMetadata?.promptTokenCount || 0),
+            outputTokens: Number(response.usageMetadata?.candidatesTokenCount || 0)
         }
     };
 }
 
-function buildImagePrompt(campaign, content, style, variationCount) {
+function buildImagePrompt(campaign, content, style, variationCount, variationIndex) {
     const article = campaign.article || {};
     return [
         `Create a polished 4:3 Facebook editorial illustration for the page "${String(content.pageName || "").slice(0, 100)}".`,
         `Visual style: ${style}.`,
-        `Generate ${variationCount} visually distinct output variation(s), each with a different composition and focal point.`,
+        `Generate variation ${variationIndex} of ${variationCount}, with a distinct composition and focal point.`,
         `Event: ${String(campaign.eventName || "").slice(0, 160)} (${String(campaign.eventDate || "")}).`,
         `Article topic: ${String(article.title || "").slice(0, 240)}.`,
         `Audience: ${String(campaign.targetAudience || "general audience").slice(0, 160)}.`,
@@ -198,48 +243,39 @@ function buildImagePrompt(campaign, content, style, variationCount) {
 }
 
 async function generateImages(campaign, content, style, count, fetchImpl = fetch) {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
     if (!apiKey) {
-        const error = new Error("AI image generation is not configured. Add OPENAI_API_KEY to backend/.env and restart the backend.");
+        const error = new Error("AI image generation is not configured. Add GEMINI_API_KEY to the backend environment and restart the backend.");
         error.status = 503;
         throw error;
     }
     if (!VARIATIONS.includes(count)) throw new Error("Choose 1, 3, or 5 image variations.");
 
-    let response;
+    const model = String(process.env.GEMINI_IMAGE_MODEL || "").trim() || "gemini-nano-banana-2.1";
+    let interactions;
     try {
-        response = await fetchImpl("https://api.openai.com/v1/images/generations", {
-            method: "POST",
-            signal: AbortSignal.timeout(180000),
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
-                prompt: buildImagePrompt(campaign, content, style, count),
-                n: count,
-                size: "1536x1024",
-                quality: "low",
-                output_format: "png"
-            })
+        const client = new GoogleGenAI({
+            apiKey,
+            httpOptions: { timeout: 180_000, fetch: fetchImpl }
         });
+        interactions = await Promise.all(Array.from({ length: count }, (_, index) =>
+            client.interactions.create({
+                model,
+                input: buildImagePrompt(campaign, content, style, count, index + 1)
+            })
+        ));
     } catch (cause) {
-        const error = new Error(cause.name === "TimeoutError" ? "AI image generation timed out. Please try again." : "AI image provider is unavailable. Please try again.");
-        error.status = cause.name === "TimeoutError" ? 504 : 502;
-        throw error;
-    }
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        const error = new Error(String(data.error?.message || `AI image provider request failed (${response.status}).`).slice(0, 500));
-        error.status = response.status === 429 ? 429 : 502;
-        throw error;
-    }
-    if (!Array.isArray(data.data) || data.data.length !== count || data.data.some(image => !image.b64_json)) {
-        throw new Error("The AI image provider returned an incomplete result. Please try again.");
+        throw providerError(cause, apiKey);
     }
 
-    return data.data.map(image => Buffer.from(image.b64_json, "base64"));
+    const images = interactions.map(interaction => interaction.output_image?.data);
+    if (images.length !== count || images.some(image => typeof image !== "string" || !image)) {
+        const error = new Error("Gemini returned an incomplete image result. Please try again.");
+        error.status = 502;
+        throw error;
+    }
+
+    return images.map(image => Buffer.from(image, "base64"));
 }
 
 module.exports = {
@@ -249,6 +285,8 @@ module.exports = {
     IMAGE_STYLES,
     VARIATIONS,
     validateSettings,
+    getActiveTextProvider,
+    providerError,
     buildContentPrompt,
     parseContentResponse,
     generateContent,

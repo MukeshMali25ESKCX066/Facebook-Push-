@@ -11,12 +11,12 @@ PageCrew is organized as a frontend/backend project:
 
 ## Run locally
 
-1. Copy `backend/.env.example` to `backend/.env` and set private credentials. Set `OPENAI_API_KEY` to enable AI text and optional image generation.
+1. Copy `backend/.env.example` to `backend/.env` and set private credentials. Use Node.js 22 or newer and set `GEMINI_API_KEY` in the backend environment for AI content and image generation (`AI_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.6-flash`, `GEMINI_IMAGE_MODEL=gemini-nano-banana-2.1`). Captions, CTAs, hashtags, and image variations use the official Google GenAI SDK server-side; `OPENAI_API_KEY` is not required for the AI Content Generator.
 2. In `backend/`, install dependencies with `npm install` if needed, then run `npm start`.
 3. In a separate terminal at the project root, run `python serve-pagecrew.py`.
 4. Open <http://127.0.0.1:5173>.
 
-Complete Event & Article Selection to save a campaign and continue into the AI Content Generator. Generation runs only after a user action; optional image generation may incur additional provider charges. Approved content is saved as a draft for review and is never published automatically. Generated content, settings, provider usage, and generation errors are stored with the encrypted campaign persistence. Configure the optional `OPENAI_*_USD_*` rate values using current provider pricing to record estimated USD costs; estimates are omitted when rates are unset.
+Complete Event & Article Selection to save a campaign and continue into the AI Content Generator. Generation runs only after a user action. Approved content is saved as a draft for review and is never published automatically. Generated content, settings, provider usage, and generation errors are stored with the encrypted campaign persistence. Configure optional `GEMINI_*_USD_*` and `OPENAI_*_USD_*` rate values using current provider pricing to record estimated USD costs; estimates are omitted when rates are unset.
 
 Run backend unit tests with `npm test` from `backend/`.
 
@@ -24,8 +24,10 @@ Approve at least one AI-generated Page post to continue to Smart Scheduler. The 
 
 The current deployment has no Redis/BullMQ or Page Insights integration. The scheduler therefore uses the existing persistent Node.js worker model and makes no unsupported claim about universally optimal publishing hours: its initial slots follow the selected timezone and posting window. Keep the backend process running for automatic publishing, set `ENCRYPTION_KEY`, and reconnect/load Facebook Pages before campaign posts are due. Scheduler endpoints are mounted under `/api/scheduler`.
 
-The Analytics page is available at `/analytics.html`; its workspace-scoped endpoints are mounted under `/api/analytics`. Published post insights are fetched from Meta on demand and remain N/A until sync succeeds; unsupported metrics or missing permissions are not fabricated. Reconnect/load Facebook Pages before syncing so Page access tokens are available. GA4 is optional: set `GA4_PROPERTY_ID` and `GA4_SERVICE_ACCOUNT_JSON` in the private backend environment, share the GA4 property with that service account as a Viewer, and use the GA4 Data API. UTM-attributed GA4 sessions are displayed separately from Facebook link clicks. Configure `OPENAI_API_KEY` to generate evidence-based optimization suggestions; suggestions do not modify or publish content, and users must approve or reject them. Reports support CSV, Excel-compatible CSV, and a printable page for saving as PDF. Best-time comparisons are observational and show low confidence when there is limited history.
+The Analytics page is available at `/analytics.html`; its workspace-scoped endpoints are mounted under `/api/analytics`. Published post insights are fetched from Meta on demand and remain N/A until sync succeeds; unsupported metrics or missing permissions are not fabricated. Reconnect/load Facebook Pages before syncing so Page access tokens are available. GA4 is optional: set `GA4_PROPERTY_ID` and `GA4_SERVICE_ACCOUNT_JSON` in the private backend environment, share the GA4 property with that service account as a Viewer, and use the GA4 Data API. UTM-attributed GA4 sessions are displayed separately from Facebook link clicks. Analytics AI optimization recommendations continue to use the optional OpenAI API and require `OPENAI_API_KEY`; suggestions do not modify or publish content, and users must approve or reject them. Reports support CSV, Excel-compatible CSV, and a printable page for saving as PDF. Best-time comparisons are observational and show low confidence when there is limited history.
 
 Configure local secrets and service settings in `backend/.env`. Do not commit that file.
+
+The deployed frontend proxies `/api/*` to `https://facebook-push.onrender.com`; therefore, set `GEMINI_API_KEY` (and optionally `AI_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.6-flash`, and `GEMINI_IMAGE_MODEL=gemini-nano-banana-2.1`) in the backend host's environment variables, then restart/redeploy that backend. A Vercel-only environment variable is not forwarded by this proxy to the Render API. Keep the Gemini key server-side; it is never sent to the browser.
 
 This checkout contains the built frontend and compiled backend output; the original frontend and backend source files are not included.
