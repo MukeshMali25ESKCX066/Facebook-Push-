@@ -150,41 +150,110 @@ function getActiveTextProvider() {
     };
 }
 
-function providerError(cause, apiKey) {
+function getProviderErrorDetails(cause, apiKey) {
     const rawMessage = String(cause?.message || "");
-    const status = Number(cause?.status || cause?.statusCode || cause?.response?.status || 0);
-    const safeMessage = (apiKey ? rawMessage.replaceAll(apiKey, "[redacted]") : rawMessage)
-        .replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]")
-        .slice(0, 400);
-    let message;
-    let responseStatus = 502;
+    let responseBody;
+    try {
+        responseBody = JSON.parse(rawMessage);
+    } catch {
+        responseBody = null;
+    }
 
-    if (cause?.name === "TimeoutError" || cause?.name === "AbortError" || status === 408) {
-        message = "Gemini content generation timed out. Please try again.";
-        responseStatus = 504;
-    } else if (status === 429 || /quota|resource_exhausted|rate.?limit/i.test(rawMessage)) {
-        message = "Gemini quota or rate limit reached. Check the Google AI Studio project quota and billing, then try again.";
-        responseStatus = 429;
-    } else if (/api.?key.*(invalid|not valid)|invalid.*api.?key|api_key_invalid/i.test(rawMessage)) {
-        message = "Gemini rejected GEMINI_API_KEY. Check that the key is valid and enabled for the Gemini Developer API.";
-        responseStatus = 503;
-    } else if (status === 401 || status === 403) {
-        message = "Gemini denied the request. Check that GEMINI_API_KEY has Gemini API access and the selected model is available.";
-        responseStatus = 503;
+    const providerError = responseBody?.error;
+    const status = Number(cause?.status || cause?.statusCode || cause?.response?.status || providerError?.code || 0);
+    const code = String(providerError?.status || providerError?.reason || "").slice(0, 80);
+    let providerMessage = String(providerError?.message || rawMessage);
+    if (providerMessage === rawMessage && cause?.name === "ApiError" && status) {
+        providerMessage = "";
+    }
+    providerMessage = providerMessage
+        .replaceAll(apiKey || "\0", "[redacted]")
+        .replace(/([?&]key=)[^&\s"'`]+/gi, "$1[redacted]")
+        .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+        .replace(/\bAIza[\w-]{20,}\b/g, "[redacted]")
+        .replace(/(?:api[_ -]?key|authorization|access[_ -]?token)(["']?\s*[:=]\s*["']?)[^\s,}"']+/gi, "$1[redacted]")
+        .replace(/[\r\n\t]+/g, " ")
+        .trim()
+        .slice(0, 300);
+    return { status, code, message: providerMessage };
+}
+
+function providerError(cause, apiKey) {
+    const details = getProviderErrorDetails(cause, apiKey);
+    const { status, code } = details;
+    let message;
+    let responseStatus = status || 502;
+
+    if (status === 400) {
+        message = `Gemini rejected the request (HTTP 400). Review the request parameters${details.message ? `: ${details.message}` : "."}`;
+    } else if (status === 401) {
+        message = `Gemini rejected the backend API key (HTTP 401). Verify GEMINI_API_KEY.${details.message ? ` ${details.message}` : ""}`;
+    } else if (status === 403) {
+        message = `Gemini denied access (HTTP 403). Check API key restrictions, project access, and model permissions.${details.message ? ` ${details.message}` : ""}`;
     } else if (status === 404) {
-        message = "The configured Gemini model is unavailable. Check GEMINI_MODEL and choose a supported model.";
-        responseStatus = 503;
-    } else if (status >= 500) {
-        message = "Gemini is temporarily unavailable. Please try again shortly.";
-    } else if (safeMessage) {
-        message = `Gemini request failed: ${safeMessage}`;
+        const model = String(process.env.GEMINI_MODEL || "").trim() || "gemini-3.6-flash";
+        message = `Gemini could not find model "${model}" (HTTP 404). Verify the configured model name.${details.message ? ` ${details.message}` : ""}`;
+    } else if (status === 429) {
+        message = `Gemini quota or rate limit exceeded (HTTP 429). Check the Google AI project quota.${details.message ? ` ${details.message}` : ""}`;
+    } else if (status === 500 || status === 503 || status >= 500) {
+        message = `Gemini returned a temporary provider error (HTTP ${status}). Try again later.${details.message ? ` ${details.message}` : ""}`;
+    } else if (cause?.name === "TimeoutError" || cause?.name === "AbortError" || status === 408) {
+        message = "Gemini request timed out before a response was received. Please try again.";
+        responseStatus = 504;
+    } else if (status > 0) {
+        message = `Gemini API returned HTTP ${status}.${details.message ? ` ${details.message}` : " Check the request and backend configuration."}`;
     } else {
-        message = "Gemini content generation failed. Please try again.";
+        message = "Gemini request failed before an HTTP response was received. Check backend network access and try again.";
+        responseStatus = 502;
     }
 
     const error = new Error(message);
     error.status = responseStatus;
+    error.providerStatus = status || null;
+    error.providerCode = code || null;
+    error.providerMessage = details.message || null;
     return error;
+}
+
+async function testGeminiConnection(fetchImpl = fetch) {
+    const provider = getActiveTextProvider();
+    if (!provider.apiKey) {
+        const error = new Error("Gemini connectivity test cannot run because GEMINI_API_KEY is not loaded in the backend environment.");
+        error.status = 503;
+        error.providerStatus = null;
+        error.providerCode = "MISSING_API_KEY";
+        throw error;
+    }
+
+    const startedAt = Date.now();
+    try {
+        const client = new GoogleGenAI({
+            apiKey: provider.apiKey,
+            httpOptions: { timeout: 30_000, fetch: fetchImpl }
+        });
+        const response = await client.models.generateContent({
+            model: provider.model,
+            contents: "Reply with OK.",
+            config: { maxOutputTokens: 8 }
+        });
+        if (typeof response.text !== "string" || !response.text.trim()) {
+            const error = new Error("Gemini accepted the connectivity request but returned no text.");
+            error.status = 502;
+            error.providerStatus = null;
+            error.providerCode = "EMPTY_RESPONSE";
+            throw error;
+        }
+        return {
+            ok: true,
+            provider: provider.provider,
+            model: response.modelVersion || provider.model,
+            keyLoaded: true,
+            latencyMs: Date.now() - startedAt
+        };
+    } catch (cause) {
+        if (cause?.providerCode === "EMPTY_RESPONSE") throw cause;
+        throw providerError(cause, provider.apiKey);
+    }
 }
 
 async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
@@ -286,7 +355,9 @@ module.exports = {
     VARIATIONS,
     validateSettings,
     getActiveTextProvider,
+    getProviderErrorDetails,
     providerError,
+    testGeminiConnection,
     buildContentPrompt,
     parseContentResponse,
     generateContent,

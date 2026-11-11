@@ -30,4 +30,6 @@ Configure local secrets and service settings in `backend/.env`. Do not commit th
 
 The deployed frontend proxies `/api/*` to `https://facebook-push.onrender.com`; therefore, set `GEMINI_API_KEY` (and optionally `AI_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.6-flash`, and `GEMINI_IMAGE_MODEL=gemini-nano-banana-2.1`) in the backend host's environment variables, then restart/redeploy that backend. A Vercel-only environment variable is not forwarded by this proxy to the Render API. Keep the Gemini key server-side; it is never sent to the browser.
 
+To test the backend's Gemini connectivity while signed in, send `POST /api/campaigns/ai/health`. It performs a small request with the configured model and reports whether the backend loaded the key, the model used, and sanitized provider status details; it never returns the key.
+
 This checkout contains the built frontend and compiled backend output; the original frontend and backend source files are not included.

@@ -31,12 +31,22 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     process.env.ENCRYPTION_KEY = "test-encryption-key-for-route";
     auth.getWorkspaceScopeId = async () => "workspace:test-ai-api";
     let providerRequest;
+    let simulatedProviderErrorStatus = 0;
     global.fetch = async (url, options) => {
         const requestUrl = new URL(String(url));
         if (requestUrl.hostname !== "generativelanguage.googleapis.com") {
             return originalFetch(url, options);
         }
         providerRequest = { url: String(url), options };
+        if (simulatedProviderErrorStatus) {
+            return Response.json({
+                error: {
+                    code: simulatedProviderErrorStatus,
+                    status: "UNAVAILABLE",
+                    message: "Simulated upstream outage."
+                }
+            }, { status: simulatedProviderErrorStatus });
+        }
         return Response.json({
             modelVersion: "gemini-3.6-flash",
             candidates: [{
@@ -115,4 +125,32 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     assert.equal(generated.usage.outputTokens, 90);
     assert.match(providerRequest.url, /generativelanguage\.googleapis\.com\/v1\/models\/gemini-3\.6-flash:generateContent/);
     assert.equal(new Headers(providerRequest.options.headers).get("x-goog-api-key"), "test-api-route-gemini-key");
+
+    const healthResponse = await fetch(`${baseUrl}/ai/health`, { method: "POST" });
+    assert.equal(healthResponse.status, 200);
+    const health = await healthResponse.json();
+    assert.equal(health.ok, true);
+    assert.equal(health.provider, "gemini");
+    assert.equal(health.model, "gemini-3.6-flash");
+    assert.equal(health.keyLoaded, true);
+    assert.equal(JSON.stringify(health).includes("test-api-route-gemini-key"), false);
+
+    simulatedProviderErrorStatus = 503;
+    const failedHealthResponse = await fetch(`${baseUrl}/ai/health`, { method: "POST" });
+    assert.equal(failedHealthResponse.status, 503);
+    const failedHealth = await failedHealthResponse.json();
+    assert.equal(failedHealth.ok, false);
+    assert.equal(failedHealth.providerStatus, 503);
+    assert.equal(failedHealth.providerCode, "UNAVAILABLE");
+    assert.match(failedHealth.error, /Simulated upstream outage/);
+    assert.equal(JSON.stringify(failedHealth).includes("test-api-route-gemini-key"), false);
+
+    simulatedProviderErrorStatus = 0;
+    delete process.env.GEMINI_API_KEY;
+    const missingKeyResponse = await fetch(`${baseUrl}/ai/health`, { method: "POST" });
+    assert.equal(missingKeyResponse.status, 503);
+    const missingKeyHealth = await missingKeyResponse.json();
+    assert.equal(missingKeyHealth.keyLoaded, false);
+    assert.equal(missingKeyHealth.providerCode, "MISSING_API_KEY");
+    assert.equal(JSON.stringify(missingKeyHealth).includes("test-api-route-gemini-key"), false);
 });

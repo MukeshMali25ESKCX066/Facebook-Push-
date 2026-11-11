@@ -180,21 +180,82 @@ test("returns a Gemini-specific configuration error when the active provider key
     }
 });
 
-test("maps Gemini invalid-key, quota, timeout, and API errors to actionable messages", () => {
-    const invalidKey = aiContent.providerError(Object.assign(new Error("API_KEY_INVALID"), { status: 400 }), "secret-key");
-    assert.equal(invalidKey.status, 503);
-    assert.match(invalidKey.message, /GEMINI_API_KEY/);
+test("classifies Gemini HTTP errors and sanitizes provider details", () => {
+    const cases = [
+        [400, /rejected the request/i],
+        [401, /rejected the backend API key/i],
+        [403, /denied access/i],
+        [404, /model "gemini-3\.6-flash"/i],
+        [429, /quota or rate limit/i],
+        [500, /temporary provider error \(HTTP 500\)/i],
+        [503, /temporary provider error \(HTTP 503\)/i]
+    ];
+    for (const [status, message] of cases) {
+        const cause = Object.assign(new Error(JSON.stringify({
+            error: { code: status, status: `STATUS_${status}`, message: `Provider detail for ${status}.` }
+        })), { name: "ApiError", status });
+        const error = aiContent.providerError(cause, "secret-gemini-key");
+        assert.equal(error.status, status);
+        assert.equal(error.providerStatus, status);
+        assert.equal(error.providerCode, `STATUS_${status}`);
+        assert.match(error.message, message);
+        assert.match(error.message, new RegExp(`Provider detail for ${status}`));
+        assert.doesNotMatch(error.message, /secret-gemini-key/);
+    }
 
-    const quota = aiContent.providerError(Object.assign(new Error("RESOURCE_EXHAUSTED"), { status: 429 }), "secret-key");
-    assert.equal(quota.status, 429);
+    const invalidKey = aiContent.providerError(Object.assign(new Error(JSON.stringify({
+        error: { code: 400, status: "INVALID_ARGUMENT", message: "Invalid request." }
+    })), { name: "ApiError", status: 400 }), "secret-key");
+    assert.equal(invalidKey.status, 400);
+
+    const quota = aiContent.providerError(Object.assign(new Error(JSON.stringify({
+        error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Quota exceeded." }
+    })), { name: "ApiError", status: 429 }), "secret-key");
     assert.match(quota.message, /quota or rate limit/);
 
     const timeout = aiContent.providerError(Object.assign(new Error("timed out"), { name: "TimeoutError" }), "secret-key");
     assert.equal(timeout.status, 504);
+    assert.equal(timeout.providerStatus, null);
 
     const unavailable = aiContent.providerError(Object.assign(new Error("internal error"), { status: 503 }), "secret-key");
-    assert.equal(unavailable.status, 502);
-    assert.match(unavailable.message, /temporarily unavailable/);
+    assert.equal(unavailable.status, 503);
+    assert.match(unavailable.message, /temporary provider error/);
+});
+
+test("connectivity test uses the configured Gemini model and never returns the API key", async () => {
+    const previousKey = process.env.GEMINI_API_KEY;
+    const previousProvider = process.env.AI_PROVIDER;
+    const previousModel = process.env.GEMINI_MODEL;
+    process.env.GEMINI_API_KEY = "private-connectivity-test-key";
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_MODEL = "gemini-3.6-flash";
+    let request;
+    try {
+        const result = await aiContent.testGeminiConnection(async (url, options) => {
+            request = { url: String(url), options };
+            return Response.json({
+                modelVersion: "gemini-3.6-flash",
+                candidates: [{ content: { parts: [{ text: "OK" }] } }]
+            });
+        });
+        assert.equal(result.ok, true);
+        assert.equal(result.provider, "gemini");
+        assert.equal(result.model, "gemini-3.6-flash");
+        assert.equal(result.keyLoaded, true);
+        assert.equal(JSON.stringify(result).includes("private-connectivity-test-key"), false);
+        assert.match(request.url, /generativelanguage\.googleapis\.com\/v1\/models\/gemini-3\.6-flash:generateContent/);
+        assert.equal(new Headers(request.options.headers).get("x-goog-api-key"), "private-connectivity-test-key");
+        const body = JSON.parse(request.options.body);
+        assert.equal(body.contents[0].parts[0].text, "Reply with OK.");
+        assert.equal(body.generationConfig.maxOutputTokens, 8);
+    } finally {
+        if (previousKey == null) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = previousKey;
+        if (previousProvider == null) delete process.env.AI_PROVIDER;
+        else process.env.AI_PROVIDER = previousProvider;
+        if (previousModel == null) delete process.env.GEMINI_MODEL;
+        else process.env.GEMINI_MODEL = previousModel;
+    }
 });
 
 test("generates image variations with Gemini without an OpenAI key", async () => {
