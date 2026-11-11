@@ -1,15 +1,21 @@
 (function () {
   function installCategory() {
     const nav = document.querySelector(".nav");
-    if (!nav || nav.querySelector('[data-pagecrew-category="event-campaigns"]')) return;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.pagecrewCategory = "event-campaigns";
-    button.innerHTML = '<span aria-hidden="true">✦</span>Event Campaigns';
-    button.addEventListener("click", () => {
-      window.location.assign("/event-campaigns.html");
+    if (!nav) return;
+    [
+      { key: "event-campaigns", icon: "✦", label: "Event Campaigns", href: "/event-campaigns.html" },
+      { key: "ai-content", icon: "✧", label: "AI Content Generator", href: "/ai-content.html" },
+      { key: "scheduler", icon: "◷", label: "Smart Scheduler", href: "/scheduler.html" },
+      { key: "analytics", icon: "▥", label: "Analytics", href: "/analytics.html" }
+    ].forEach(item => {
+      if (nav.querySelector(`[data-pagecrew-category="${item.key}"]`)) return;
+      const link = document.createElement("a");
+      link.className = "nav-link";
+      link.dataset.pagecrewCategory = item.key;
+      link.href = item.href;
+      link.innerHTML = `<span aria-hidden="true">${item.icon}</span>${item.label}`;
+      nav.appendChild(link);
     });
-    nav.appendChild(button);
   }
 
   installCategory();

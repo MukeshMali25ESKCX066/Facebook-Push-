@@ -20,6 +20,7 @@ function de(s) {
   });
 }
 module.exports = function persist(name, getState, loadState) {
+  let flush = () => false;
   setImmediate(() => {
     const secret = process.env.ENCRYPTION_KEY;
     if (!secret) { console.log(`[persist:${name}] ENCRYPTION_KEY missing, persistence off`); return; }
@@ -42,7 +43,7 @@ module.exports = function persist(name, getState, loadState) {
     const save = () => {
       try {
         const s = ser(getState());
-        if (s === last) return;
+        if (s === last) return true;
         const iv = crypto.randomBytes(12);
         const c = crypto.createCipheriv("aes-256-gcm", key, iv);
         const enc = Buffer.concat([c.update(s, "utf8"), c.final()]);
@@ -50,10 +51,16 @@ module.exports = function persist(name, getState, loadState) {
         fs.writeFileSync(file + ".tmp", out, { mode: 0o600 });
         fs.renameSync(file + ".tmp", file);
         last = s;
-      } catch (e) { console.log(`[persist:${name}] save failed: ${e.message}`); }
+        return true;
+      } catch (e) {
+        console.log(`[persist:${name}] save failed: ${e.message}`);
+        return false;
+      }
     };
+    flush = save;
     setInterval(save, 5000).unref();
     process.on("SIGTERM", () => { save(); process.exit(0); });
     process.on("exit", save);
   });
+  return () => flush();
 };

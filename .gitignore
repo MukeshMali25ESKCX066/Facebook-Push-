@@ -3,6 +3,7 @@
 !.env.example
 **/.env
 **/.env.*
+!**/.env.example
 **/node_modules/
 **/uploads/
 **/pagecrew-data/

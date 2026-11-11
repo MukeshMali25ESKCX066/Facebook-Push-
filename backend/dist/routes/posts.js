@@ -19,6 +19,7 @@ serverless_1.neonConfig.webSocketConstructor = ws_1.default;
 const auth_js_1 = require("./auth.js");
 const pages_js_1 = require("./pages.js");
 const meta_js_1 = require("../services/meta.js");
+const publishing_js_1 = require("../services/publishing.js");
 const router = (0, express_1.Router)();
 const mediaDirectory = (0, node_path_1.resolve)(__dirname, "../../uploads");
 (0, node_fs_1.mkdirSync)(mediaDirectory, { recursive: true });
@@ -280,36 +281,11 @@ async function publishJob(job) {
     }
 }
 async function publishJobCore(job) {
-    let publishedCount = 0;
-    const pageErrors = {};
-    for (const pageId of job.pageIds) {
-        if (job.fbScheduled?.[pageId]) {
-            publishedCount += 1;
-            continue;
-        }
-        const pageToken = findPageToken(job.ownerScopeId, pageId);
-        if (!pageToken) {
-            pageErrors[pageId] = "No Page access token. Reconnect Facebook and reload your Pages.";
-            continue;
-        }
-        try {
-            await (0, meta_js_1.publishToPage)(pageId, pageToken, job.content, job.media);
-            publishedCount += 1;
-        }
-        catch (error) {
-            pageErrors[pageId] = error instanceof Error ? error.message : "Facebook publish failed.";
-        }
-    }
-    job.pageErrors = pageErrors;
-    if (publishedCount === job.pageIds.length) {
-        job.status = "published";
-    }
-    else if (publishedCount > 0) {
-        job.status = "partial";
-    }
-    else {
-        job.status = "failed";
-    }
+    await (0, publishing_js_1.publishJobToPages)(job, {
+        getPageToken: (pageId) => findPageToken(job.ownerScopeId, pageId),
+        publishToPage: (pageId, pageToken, content, media) => (0, meta_js_1.publishToPage)(pageId, pageToken, content, media),
+        persist: saveJob
+    });
 }
 async function refreshScheduledJobs(ownerScopeId) {
     const now = Date.now();

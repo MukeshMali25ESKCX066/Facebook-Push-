@@ -60,7 +60,10 @@
           </div>
           <span class="event-badge ${campaign.status === "ready" ? "ready" : ""}">${escapeHtml(campaign.status || "draft")}</span>
         </div>
-        <div class="event-card-actions"><button class="event-button event-button-secondary" type="button" data-edit="${escapeHtml(campaign.id)}">Open draft</button></div>
+        <div class="event-card-actions">
+          ${campaign.status === "ready" ? `<a class="event-button" href="/ai-content.html?campaign=${encodeURIComponent(campaign.id)}">AI content</a>` : ""}
+          <button class="event-button event-button-secondary" type="button" data-edit="${escapeHtml(campaign.id)}">Open draft</button>
+        </div>
       </article>`).join("");
     list.querySelectorAll("[data-edit]").forEach(button => button.addEventListener("click", () => {
       const campaign = state.campaigns.find(item => item.id === button.dataset.edit);
@@ -155,7 +158,10 @@
   }
 
   function selectedPages() {
-    return [...root.querySelectorAll('input[name="targetPage"]:checked')].map(input => ({ id: input.value, name: input.dataset.name }));
+    return [...root.querySelectorAll('input[name="targetPage"]:checked')].map(input => {
+      const page = state.pages.find(item => String(item.id) === input.value);
+      return { id: input.value, name: input.dataset.name, pictureUrl: page?.pictureUrl || "" };
+    });
   }
 
   function updateSummary() {
@@ -283,6 +289,26 @@
       pages,
       status
     };
+    const existing = state.campaigns.find(item => item.id === state.editingId);
+    if (existing?.aiContent?.length) {
+      const oldPages = (existing.pages || []).map(page => `${page.id}:${page.name}`).join("|");
+      const newPages = pages.map(page => `${page.id}:${page.name}`).join("|");
+      const aiBriefChanged = existing.eventName !== payload.eventName.trim()
+        || existing.eventDate !== payload.eventDate
+        || existing.eventCategory !== payload.eventCategory
+        || existing.description !== payload.description
+        || existing.targetAudience !== payload.targetAudience
+        || existing.articleUrl !== payload.articleUrl
+        || (existing.article?.title || "") !== payload.article.title
+        || (existing.article?.description || "") !== payload.article.description
+        || (existing.featuredImage || "") !== payload.featuredImage
+        || oldPages !== newPages;
+      if (aiBriefChanged && existing.aiContent.some(item => item.status === "approved")) {
+        message.textContent = "Unapprove this campaign's AI content before changing its event, article, image, or selected Pages.";
+        return;
+      }
+      if (aiBriefChanged && !window.confirm("Changing this campaign brief will remove its saved AI drafts and generated images. Continue?")) return;
+    }
     try {
       const saved = state.editingId
         ? await request(`/api/campaigns/${encodeURIComponent(state.editingId)}`, { method: "PUT", body: JSON.stringify(payload) })
@@ -290,7 +316,11 @@
       state.editingId = saved.id;
       if (status === "ready") await request(`/api/campaigns/${encodeURIComponent(saved.id)}/continue`, { method: "POST" });
       state.campaigns = await request("/api/campaigns");
-      renderLanding(status === "draft" ? "Draft saved." : "Campaign setup is ready for the next workflow step.");
+      if (status === "ready") {
+        window.location.assign(`/ai-content.html?campaign=${encodeURIComponent(saved.id)}`);
+        return;
+      }
+      renderLanding("Draft saved.");
     } catch (error) {
       message.textContent = error.message;
     }
