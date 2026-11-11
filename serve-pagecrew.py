@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 
 BACKEND = "http://127.0.0.1:4000"
-FRONTEND = Path(__file__).resolve().parent / "well-known"
+FRONTEND = Path(__file__).resolve().parent / "frontend" / "public"
 
 
 class PageCrewHandler(SimpleHTTPRequestHandler):
