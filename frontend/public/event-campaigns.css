@@ -36,14 +36,20 @@
 .event-section-heading { display:flex; align-items:end; justify-content:space-between; gap:16px; margin:0 0 13px; }
 .event-section-heading h3 { margin:0; color:var(--event-navy); font-size:17px; }
 .event-section-heading p { margin:4px 0 0; color:var(--event-muted); font-size:12px; }
+.event-running-section { margin:0 0 25px; }
 .event-campaign-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 .event-campaign-card { min-width:0; padding:17px; border:1px solid var(--event-border); border-radius:14px; background:#fff; box-shadow:0 2px 8px #0f172a08; }
+.event-running-card { border-color:#b7ebcd; background:linear-gradient(120deg,#fff 15%,#f4fcf7 100%); }
 .event-card-top { display:flex; justify-content:space-between; gap:12px; }
 .event-card-top h4 { margin:0; overflow-wrap:anywhere; color:var(--event-navy); font-size:15px; }
 .event-card-meta { display:flex; flex-wrap:wrap; gap:7px; margin:10px 0 14px; color:var(--event-muted); font-size:11px; }
 .event-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 9px; background:#f2f4f7; color:#475467; font-size:10px; font-weight:800; text-transform:capitalize; }
 .event-badge.ready { background:#ecfdf3; color:#027a48; }
+.event-badge.running { background:#dcfae6; color:#067647; }
+.event-badge.paused { background:#fff4e5; color:#b54708; }
 .event-card-actions { display:flex; justify-content:flex-end; gap:8px; }
+.event-button-danger { background:#d92d20; }
+.event-button-danger:hover { background:#b42318; }
 .event-form-layout { display:grid; grid-template-columns:minmax(0,1fr) 285px; align-items:start; gap:16px; }
 .event-form-column { display:grid; gap:14px; min-width:0; }
 .event-panel,.event-summary { min-width:0; border:1px solid var(--event-border); border-radius:14px; background:#fff; box-shadow:0 2px 8px #0f172a08; }
@@ -120,6 +126,7 @@
   .event-step { min-height:48px; padding:8px; }
   .event-step strong { font-size:10px; }
   .event-form-layout,.event-campaign-list { grid-template-columns:1fr; }
+  .event-running-card .event-card-actions { justify-content:flex-start; flex-wrap:wrap; }
   .event-summary { position:static; }
 }
 @media(max-width:440px) {

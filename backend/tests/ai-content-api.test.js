@@ -4,13 +4,17 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const express = require("express");
 
+let persistCalls = 0;
 const persistPath = require.resolve("../dist/persist.js");
 const originalPersistModule = require.cache[persistPath];
 require.cache[persistPath] = {
     id: persistPath,
     filename: persistPath,
     loaded: true,
-    exports: () => () => true
+    exports: () => () => {
+        persistCalls += 1;
+        return true;
+    }
 };
 const auth = require("../dist/routes/auth.js");
 const campaignsRoute = require("../dist/routes/campaigns.js").default;
@@ -117,6 +121,23 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     });
     assert.equal(campaignResponse.status, 201);
     const campaign = await campaignResponse.json();
+    assert.equal(persistCalls, 1, "new campaigns must be saved before returning success");
+
+    const updateResponse = await fetch(`${baseUrl}/${campaign.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...campaign, campaignName: "Updated Thanksgiving guide" })
+    });
+    assert.equal(updateResponse.status, 200);
+    assert.equal(persistCalls, 2, "campaign edits must be saved before returning success");
+
+    const continueResponse = await fetch(`${baseUrl}/${campaign.id}/continue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+    });
+    assert.equal(continueResponse.status, 200);
+    assert.equal(persistCalls, 3, "campaign activation must be saved before returning success");
 
     const generationResponse = await fetch(`${baseUrl}/${campaign.id}/ai/generate`, {
         method: "POST",

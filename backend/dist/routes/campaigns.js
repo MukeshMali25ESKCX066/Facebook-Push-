@@ -188,8 +188,8 @@ function findCampaign(id, workspaceId) {
 }
 
 function requireEncryptedPersistence(res) {
-    if (process.env.ENCRYPTION_KEY) return true;
-    res.status(503).json({ error: "Set ENCRYPTION_KEY in backend/.env to save AI content securely." });
+    if (String(process.env.ENCRYPTION_KEY || "").trim()) return true;
+    res.status(503).json({ error: "Set ENCRYPTION_KEY in the backend environment to save campaign data securely." });
     return false;
 }
 
@@ -637,6 +637,7 @@ router.post("/", async (req, res) => {
         res.status(400).json({ error: errors.join(" ") });
         return;
     }
+    if (!requireEncryptedPersistence(res)) return;
     const now = new Date().toISOString();
     const campaign = {
         id: randomUUID(),
@@ -660,6 +661,7 @@ router.post("/", async (req, res) => {
         updatedAt: now
     };
     campaigns.push(campaign);
+    if (!persistCampaignOrRespond(res)) return;
     res.status(201).json(campaign);
 });
 
@@ -676,6 +678,7 @@ router.put("/:id", async (req, res) => {
         res.status(400).json({ error: errors.join(" ") });
         return;
     }
+    if (!requireEncryptedPersistence(res)) return;
     const resetAiContent = Array.isArray(campaign.aiContent) && campaign.aiContent.length > 0 && aiBriefChanged(campaign, body);
     if (resetAiContent && campaign.aiContent.some(item => item.status === "approved")) {
         return res.status(409).json({ error: "Unapprove this campaign's AI content before changing its event, article, image, or selected Pages." });
@@ -705,8 +708,8 @@ router.put("/:id", async (req, res) => {
     if (resetAiContent) {
         campaign.aiContent = [];
         await removeGeneratedImages(oldImages);
-        if (!persistCampaignOrRespond(res)) return;
     }
+    if (!persistCampaignOrRespond(res)) return;
     res.json(campaign);
 });
 
@@ -721,8 +724,10 @@ router.post("/:id/continue", async (req, res) => {
         res.status(400).json({ error: errors.join(" ") });
         return;
     }
+    if (!requireEncryptedPersistence(res)) return;
     campaign.status = "ready";
     campaign.updatedAt = new Date().toISOString();
+    if (!persistCampaignOrRespond(res)) return;
     res.json({ ok: true, campaignId: campaign.id, next: "ai-content-generator", campaign });
 });
 

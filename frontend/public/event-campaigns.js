@@ -1,6 +1,6 @@
 (function () {
   const root = document.getElementById("event-app");
-  const state = { campaigns: [], pages: [], editingId: "", article: {}, image: "", loadingPages: false };
+  const state = { campaigns: [], schedules: [], pages: [], editingId: "", article: {}, image: "", loadingPages: false };
 
   function escapeHtml(value) {
     const node = document.createElement("span");
@@ -36,13 +36,76 @@
         <div class="event-step"><span class="event-step-number">4</span><strong>Facebook publishing</strong></div>
         <div class="event-step"><span class="event-step-number">5</span><strong>Analytics</strong></div>
       </section>
+      <section class="event-running-section">
+        <div class="event-section-heading"><div><h3>Running campaigns</h3><p>Started campaigns appear here. Pause, resume, stop, or manage their schedules.</p></div></div>
+        <div id="event-running-list" class="event-campaign-list"></div>
+      </section>
       <section>
-        <div class="event-section-heading"><div><h3>Your campaigns</h3><p>Drafts and campaign setups for your workspace.</p></div></div>
-        ${message ? `<div class="event-form-message">${escapeHtml(message)}</div>` : ""}
+        <div class="event-section-heading"><div><h3>All campaigns</h3><p>Drafts and campaign setups for your workspace.</p></div></div>
+        ${message ? `<div id="event-list-message" class="event-form-message" role="status">${escapeHtml(message)}</div>` : ""}
         <div id="event-campaign-list" class="event-campaign-list"></div>
       </section>`;
     root.querySelector('[data-action="new"]').addEventListener("click", () => renderForm());
     renderCampaignCards();
+    renderRunningCampaigns();
+    root.querySelectorAll("[data-schedule-action]").forEach(button => button.addEventListener("click", () => {
+      manageSchedule(button.dataset.campaign, button.dataset.scheduleAction, button);
+    }));
+  }
+
+  function renderRunningCampaigns() {
+    const list = root.querySelector("#event-running-list");
+    if (!list) return;
+    const runningSchedules = state.schedules.filter(schedule => ["active", "paused"].includes(schedule.status));
+    if (!runningSchedules.length) {
+      list.innerHTML = `<div class="event-empty">No running campaigns. Start an approved schedule to manage it here.</div>`;
+      return;
+    }
+    list.innerHTML = runningSchedules.map(schedule => {
+      const campaign = state.campaigns.find(item => item.id === schedule.campaignId);
+      if (!campaign) return "";
+      const posts = schedule.posts || [];
+      const queuedCount = posts.filter(post => ["draft", "scheduled", "publishing"].includes(post.status)).length;
+      const publishedCount = posts.filter(post => post.status === "published").length;
+      const failedCount = posts.filter(post => post.status === "failed").length;
+      const running = schedule.status === "active";
+      return `<article class="event-campaign-card event-running-card">
+        <div class="event-card-top">
+          <div><h4>${escapeHtml(campaign.campaignName || campaign.eventName || "Untitled campaign")}</h4>
+            <div class="event-card-meta"><span>${escapeHtml(campaign.eventName || "Event")}</span>
+              <span>·</span><span>${queuedCount} queued</span><span>·</span><span>${publishedCount} published</span>
+              ${failedCount ? `<span>·</span><span>${failedCount} failed</span>` : ""}
+            </div>
+          </div>
+          <span class="event-badge ${running ? "running" : "paused"}">${running ? "Running" : "Paused"}</span>
+        </div>
+        <div class="event-card-actions">
+          <a class="event-button event-button-secondary" href="/scheduler.html?campaign=${encodeURIComponent(schedule.campaignId)}">Manage schedule</a>
+          ${running
+            ? `<button class="event-button event-button-secondary" type="button" data-schedule-action="pause" data-campaign="${escapeHtml(schedule.campaignId)}">Pause</button>`
+            : `<button class="event-button" type="button" data-schedule-action="resume" data-campaign="${escapeHtml(schedule.campaignId)}">Resume</button>`}
+          <button class="event-button event-button-danger" type="button" data-schedule-action="stop" data-campaign="${escapeHtml(schedule.campaignId)}">Stop</button>
+        </div>
+      </article>`;
+    }).join("") || `<div class="event-empty">No running campaigns.</div>`;
+  }
+
+  async function manageSchedule(campaignId, action, button) {
+    if (action === "stop" && !window.confirm("Stop this campaign and cancel all remaining queued posts?")) return;
+    const path = { pause: "pause", resume: "resume", stop: "stop" }[action];
+    if (!path) return;
+    button.disabled = true;
+    try {
+      await request(`/api/scheduler/campaign/${encodeURIComponent(campaignId)}/${path}`, { method: "POST" });
+      state.schedules = await request("/api/scheduler");
+      const message = { pause: "Campaign paused.", resume: "Campaign resumed.", stop: "Campaign stopped; queued posts were cancelled." }[action];
+      renderLanding(message);
+    } catch (error) {
+      button.disabled = false;
+      const banner = root.querySelector("#event-list-message");
+      if (banner) banner.textContent = error.message;
+      else renderLanding(error.message);
+    }
   }
 
   function renderCampaignCards() {
@@ -62,7 +125,7 @@
         </div>
         <div class="event-card-actions">
           ${campaign.status === "ready" ? `<a class="event-button" href="/ai-content.html?campaign=${encodeURIComponent(campaign.id)}">AI content</a>` : ""}
-          <button class="event-button event-button-secondary" type="button" data-edit="${escapeHtml(campaign.id)}">Open draft</button>
+          <button class="event-button event-button-secondary" type="button" data-edit="${escapeHtml(campaign.id)}">Open campaign</button>
         </div>
       </article>`).join("");
     list.querySelectorAll("[data-edit]").forEach(button => button.addEventListener("click", () => {
@@ -328,7 +391,10 @@
 
   async function start() {
     try {
-      state.campaigns = await request("/api/campaigns");
+      [state.campaigns, state.schedules] = await Promise.all([
+        request("/api/campaigns"),
+        request("/api/scheduler")
+      ]);
       renderLanding();
     } catch (error) {
       root.innerHTML = `<section class="event-hero"><div class="event-hero-copy"><p class="event-eyebrow">PageCrew workspace</p><h2>Sign in to manage event campaigns</h2><p>${escapeHtml(error.message)}</p></div><a class="event-button" href="/">Open PageCrew</a></section>`;
