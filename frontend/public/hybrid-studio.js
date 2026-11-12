@@ -13,13 +13,24 @@
   }
 
   async function request(url, options = {}) {
-    const response = await fetch(url, {
-      credentials: "include",
-      ...options,
-      headers: { ...(options.body && !(options.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) }
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        credentials: "include",
+        ...options,
+        headers: { ...(options.body && !(options.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) }
+      });
+    } catch (cause) {
+      const error = new Error("Could not reach the PageCrew server. Check your connection and try again.");
+      error.cause = cause;
+      throw error;
+    }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+    if (!response.ok) {
+      const error = new Error(data.error || `Request failed (${response.status}).`);
+      error.status = response.status;
+      throw error;
+    }
     return data;
   }
 
@@ -53,12 +64,12 @@
     const steps = [
       { title: "Connect Facebook Pages", detail: "Use the existing secure PageCrew connection.", href: "/", complete: state.pages.length > 0 },
       { title: "Create campaign", detail: "Set the event, dates, audience, and Pages.", href: campaign ? `/event-campaigns.html?campaign=${encodeURIComponent(campaign.id)}` : "/event-campaigns.html", complete: campaign?.status === "ready" },
-      { title: "Build URL library", detail: "Add campaign article URLs for content generation.", href: "#urls", complete: state.urls.length > 0 },
-      { title: "Build image library", detail: "Upload campaign images for your content.", href: "#images", complete: state.images.length > 0 },
+      { title: "Build URL library", detail: "Add campaign article URLs for content generation.", href: "#module-urls", complete: state.urls.length > 0 },
+      { title: "Build image library", detail: "Upload campaign images for your content.", href: "#module-images", complete: state.images.length > 0 },
       { title: "Map campaign assets", detail: "Review URL and image assignments for selected Pages.", href: campaign ? `/event-campaigns.html?campaign=${encodeURIComponent(campaign.id)}` : "/event-campaigns.html", complete: Boolean(campaign?.pages?.length && assignedPages === campaign.pages.length) },
       { title: "Generate AI content", detail: "Create and review Page-specific post drafts.", href: campaign ? `/ai-content.html?campaign=${encodeURIComponent(campaign.id)}` : "/event-campaigns.html", complete: generated },
       { title: "Configure schedule", detail: "Set Page-level frequency and publishing times.", href: campaign ? `/scheduler.html?campaign=${encodeURIComponent(campaign.id)}` : "/event-campaigns.html", complete: Boolean(schedule) },
-      { title: "Review publishing queue", detail: "Inspect queued, published, and failed posts.", href: campaign ? `/scheduler.html?campaign=${encodeURIComponent(campaign.id)}` : "#post-queue", complete: posts.length > 0 },
+      { title: "Review publishing queue", detail: "Inspect queued, published, and failed posts.", href: campaign ? `/scheduler.html?campaign=${encodeURIComponent(campaign.id)}` : "#module-queue", complete: posts.length > 0 },
       { title: "Measure results", detail: "Review available Page and link analytics.", href: "/analytics.html", complete: state.summary.publishedPosts > 0 }
     ];
     const firstIncomplete = steps.findIndex(step => !step.complete);
@@ -122,9 +133,23 @@
       .map(post => ({ ...post, campaignName: schedule.settings?.campaignName || "Campaign", campaignId: schedule.campaignId })))
       .sort((a, b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt)))
       .slice(0, 10);
+    const historyPosts = state.schedules.flatMap(schedule => (schedule.posts || [])
+      .filter(post => ["published", "failed", "cancelled"].includes(post.status))
+      .map(post => ({ ...post, campaignName: schedule.settings?.campaignName || "Campaign" })))
+      .sort((a, b) => String(b.publishedAt || b.updatedAt || b.scheduledAt).localeCompare(String(a.publishedAt || a.updatedAt || a.scheduledAt)))
+      .slice(0, 30);
+    const selectedPages = activeCampaign?.pages || [];
+    const configuredPages = activeSchedule?.pages || selectedPages.map(page => ({
+      pageId: page.id,
+      pageName: page.name,
+      timezone: activeCampaign?.timezone,
+      dailyPostLimit: activeSchedule?.settings?.dailyPostLimit,
+      minimumGapMinutes: activeSchedule?.settings?.minimumGapMinutes
+    }));
 
     root.innerHTML = `
       ${state.message ? `<div class="studio-alert ${state.error ? "error" : ""}" role="status">${escapeHtml(state.message)}</div>` : ""}
+      <div id="module-dashboard">
       <section class="studio-hero"><div><h2>One workspace, full campaign lifecycle</h2>
         <p>Reuse the connected Facebook Pages, campaign setup, scheduler, Meta publishing and analytics already in PageCrew.</p></div>
         <a class="studio-button" href="/event-campaigns.html">Create campaign</a>
@@ -145,16 +170,25 @@
         ].map(([label, value, note]) => `<article class="studio-kpi"><div class="studio-kpi-label">${escapeHtml(label)}</div>
           <div class="studio-kpi-value">${escapeHtml(value)}</div><div class="studio-kpi-note">${escapeHtml(note)}</div></article>`).join("")}
       </section>
+      </div>
       <div class="studio-grid">
-        <section class="studio-panel" id="urls"><div class="studio-panel-heading"><h3>URL library</h3><a href="/analytics.html">Analytics &amp; UTM reports →</a></div>
-          <p class="studio-panel-copy">Add public article URLs here, then select campaign URLs during setup.</p>
+        <section class="studio-panel" id="module-pages"><div class="studio-panel-heading"><h3>Facebook Pages</h3><a href="/#pages">Manage Facebook connection →</a></div>
+          <p class="studio-panel-copy">Uses the existing secure PageCrew Facebook connection. Page access tokens are not shown in this list.</p>
+          <div class="studio-list">${state.pages.length ? state.pages.map(page => `<div class="studio-row">
+            ${page.pictureUrl ? `<img class="studio-image-thumb" src="${escapeHtml(page.pictureUrl)}" alt="">` : ""}
+            <div class="studio-row-main"><strong>${escapeHtml(page.name || "Facebook Page")}</strong><small>${escapeHtml(page.account || "Connected Page")}</small></div>
+            <span class="studio-badge active">Connected</span>
+          </div>`).join("") : `<div class="studio-empty">No connected Pages found. Connect Facebook in PageCrew first.</div>`}</div>
+        </section>
+        <section class="studio-panel" id="module-urls"><div class="studio-panel-heading"><h3>URL Library</h3><a href="/event-campaigns.html">Assign in campaign setup →</a></div>
+          <p class="studio-panel-copy">Import public article URLs, then assign them to selected campaign Pages.</p>
           <form id="studio-url-form" class="studio-url-form"><textarea name="urls" required placeholder="https://example.com/article-one&#10;https://example.com/article-two"></textarea>
             <div class="studio-actions"><button class="studio-button" type="submit">Import URLs</button><span class="studio-panel-copy">${state.urls.length} saved URL(s)</span></div></form>
           <div class="studio-list">${state.urls.length ? state.urls.map(item => `<div class="studio-row"><div class="studio-row-main">
             <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a><small>Added ${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</small>
           </div><button class="studio-button secondary" data-action="delete-url" data-id="${escapeHtml(item.id)}">Remove</button></div>`).join("") : `<div class="studio-empty">No URLs imported yet.</div>`}</div>
         </section>
-        <section class="studio-panel" id="images"><div class="studio-panel-heading"><h3>Image library</h3><a href="/event-campaigns.html">Use in a campaign →</a></div>
+        <section class="studio-panel" id="module-images"><div class="studio-panel-heading"><h3>Image Library</h3><a href="/event-campaigns.html">Assign to campaign Pages →</a></div>
           <p class="studio-panel-copy">Upload JPG, PNG, or WebP images (up to 10 MB) for campaign content.</p>
           <form id="studio-image-form" class="studio-url-form"><input class="studio-image-input" type="file" name="image" accept="image/jpeg,image/png,image/webp" required>
             <div class="studio-actions"><button class="studio-button" type="submit">Upload image</button><span class="studio-panel-copy">${state.images.length} saved image(s)</span></div></form>
@@ -164,15 +198,59 @@
             <button class="studio-button secondary" data-action="delete-image" data-id="${escapeHtml(item.id)}">Remove</button>
           </div>`).join("") : `<div class="studio-empty">No images uploaded yet.</div>`}</div>
         </section>
-        <section class="studio-panel" id="campaign-management"><div class="studio-panel-heading"><h3>Campaigns &amp; publishing controls</h3><a href="/event-campaigns.html">All campaigns →</a></div>
+        <section class="studio-panel" id="module-campaigns"><div class="studio-panel-heading"><h3>Campaign Manager</h3><a href="/event-campaigns.html">Create or edit campaigns →</a></div>
           <p class="studio-panel-copy">Start, pause, resume, stop, or edit the schedules already connected to Facebook publishing.</p>
           <div class="studio-campaigns">${campaignCards || `<div class="studio-empty">Create a campaign to get started.</div>`}</div>
         </section>
-        <section class="studio-panel" id="post-queue"><div class="studio-panel-heading"><h3>Post queue</h3><a href="/scheduler.html">Open scheduler →</a></div>
-          <p class="studio-panel-copy">Next scheduled campaign posts and publishing status.</p>
+        <section class="studio-panel" id="module-matching"><div class="studio-panel-heading"><h3>Smart Matching</h3><a href="${activeCampaign ? `/event-campaigns.html?campaign=${encodeURIComponent(activeCampaign.id)}` : "/event-campaigns.html"}">Review Page assignments →</a></div>
+          <p class="studio-panel-copy">Current campaign/Page assignments are shown below. Automatic ALL-policy rotation and collision-safe reservations are not yet implemented.</p>
+          <div class="studio-list">${selectedPages.length ? selectedPages.map(page => `<div class="studio-row"><div class="studio-row-main">
+            <strong>${escapeHtml(page.name || page.pageName || page.id || page.pageId)}</strong>
+            <small>URL: ${escapeHtml(page.articleUrl || "Not assigned")} · Image: ${escapeHtml(page.libraryImageId ? (state.images.find(image => image.id === page.libraryImageId)?.name || "Selected image") : "Not assigned")}</small>
+          </div></div>`).join("") : `<div class="studio-empty">Choose a campaign to see its Page asset assignments.</div>`}</div>
+        </section>
+        <section class="studio-panel" id="module-ai"><div class="studio-panel-heading"><h3>AI Content</h3>
+          <a href="${activeCampaign ? `/ai-content.html?campaign=${encodeURIComponent(activeCampaign.id)}` : "/event-campaigns.html"}">Open content workspace →</a></div>
+          <p class="studio-panel-copy">${activeCampaign ? `${(activeCampaign.aiContent || []).length} generated post(s) for ${escapeHtml(activeCampaign.campaignName || activeCampaign.eventName || "the selected campaign")}.` : "Select or create a campaign to generate Page-specific content."}</p>
+          <div class="studio-actions">${activeCampaign ? `<a class="studio-button" href="/ai-content.html?campaign=${encodeURIComponent(activeCampaign.id)}">Open AI Content</a>` : `<a class="studio-button" href="/event-campaigns.html">Create campaign</a>`}</div>
+        </section>
+        <section class="studio-panel" id="module-scheduler"><div class="studio-panel-heading"><h3>Hybrid Scheduler</h3>
+          <a href="${activeCampaign ? `/scheduler.html?campaign=${encodeURIComponent(activeCampaign.id)}` : "/scheduler.html"}">Open scheduler →</a></div>
+          <p class="studio-panel-copy">The existing scheduler supports per-Page timezone, daily caps, and gaps. Persistent Round-Robin Page selection is not yet implemented.</p>
+          <div class="studio-campaigns">${state.schedules.length ? state.schedules.map(schedule => `<article class="studio-campaign">
+            <div class="studio-campaign-main"><strong>${escapeHtml(schedule.settings?.campaignName || "Campaign schedule")}</strong><div class="studio-campaign-meta">${(schedule.posts || []).length} posts · ${escapeHtml(schedule.status)}</div></div>
+            <a class="studio-button secondary" href="/scheduler.html?campaign=${encodeURIComponent(schedule.campaignId)}">Manage</a>
+          </article>`).join("") : `<div class="studio-empty">No campaign schedules yet.</div>`}</div>
+        </section>
+        <section class="studio-panel" id="module-queue"><div class="studio-panel-heading"><h3>Post Queue &amp; Preview</h3><a href="/scheduler.html">Open schedule editor →</a></div>
+          <p class="studio-panel-copy">Upcoming scheduled campaign posts and their publishing times.</p>
           <div class="studio-post-list">${scheduledPosts.length ? scheduledPosts.map(post => `<article class="studio-post">
             <div><strong>${escapeHtml(post.pageName)} · ${escapeHtml(post.campaignName)}</strong><p>${escapeHtml(post.content || post.caption || "")}</p></div>
             <time>${escapeHtml(postTime(post))}</time></article>`).join("") : `<div class="studio-empty">No scheduled posts in the queue.</div>`}</div>
+        </section>
+        <section class="studio-panel" id="module-history"><div class="studio-panel-heading"><h3>Publishing History</h3><a href="/scheduler.html">Review failed or pending posts →</a></div>
+          <p class="studio-panel-copy">Recent published, failed, and cancelled posts across campaign schedules.</p>
+          <div class="studio-post-list">${historyPosts.length ? historyPosts.map(post => `<article class="studio-post">
+            <div><strong>${escapeHtml(post.pageName || "Facebook Page")} · ${escapeHtml(post.campaignName)}</strong><p>${escapeHtml(post.content || post.caption || "")}</p>
+              <span class="studio-badge ${post.status === "published" ? "active" : ""}">${escapeHtml(post.status)}</span></div>
+            <time>${escapeHtml(postTime(post))}</time></article>`).join("") : `<div class="studio-empty">No campaign publishing history available yet.</div>`}</div>
+        </section>
+        <section class="studio-panel" id="module-analytics"><div class="studio-panel-heading"><h3>Analytics &amp; Optimization</h3><a href="/analytics.html">Open analytics dashboard →</a></div>
+          <p class="studio-panel-copy">${escapeHtml(state.summary.analyticsNote || "Performance data depends on available Facebook Insights and tracking data.")}</p>
+          <div class="studio-kpis studio-module-kpis">${[
+            ["Reach", number(state.summary.reach)],
+            ["Link clicks", number(state.summary.linkClicks)],
+            ["Published", number(state.summary.publishedPosts)],
+            ["Failed", number(state.summary.failedPosts)]
+          ].map(([label, value]) => `<article class="studio-kpi"><div class="studio-kpi-label">${escapeHtml(label)}</div><div class="studio-kpi-value">${escapeHtml(value)}</div></article>`).join("")}</div>
+          <div class="studio-actions"><a class="studio-button" href="/analytics.html">View reports &amp; recommendations</a></div>
+        </section>
+        <section class="studio-panel" id="module-settings"><div class="studio-panel-heading"><h3>Settings &amp; API Logs</h3><a href="/event-campaigns.html">Edit campaign settings →</a></div>
+          <p class="studio-panel-copy">Scheduler limits and time zones are configured per Page in each campaign. API logs are not exposed in the current workspace API.</p>
+          <div class="studio-list">${configuredPages.length ? configuredPages.map(page => `<div class="studio-row"><div class="studio-row-main">
+            <strong>${escapeHtml(page.pageName || page.name || page.pageId || page.id)}</strong>
+            <small>Time zone: ${escapeHtml(page.timezone || "Campaign default")} · Daily limit: ${escapeHtml(page.dailyPostLimit ?? "Campaign default")} · Minimum gap: ${escapeHtml(page.minimumGapMinutes ?? "Campaign default")} min</small>
+          </div></div>`).join("") : `<div class="studio-empty">Select a campaign to review its Page-level settings.</div>`}</div>
         </section>
       </div>`;
     const campaignPicker = root.querySelector("#studio-campaign-picker");
@@ -259,8 +337,20 @@
     }
   }
 
-  refresh().catch(error => {
-    root.innerHTML = `<section class="studio-hero"><div><h2>Sign in to open Hybrid Function</h2><p>${escapeHtml(error.message)}</p></div>
-      <a class="studio-button" href="/">Open PageCrew</a></section>`;
-  });
+  function renderLoadError(error) {
+    const needsLogin = error.status === 401;
+    const title = needsLogin ? "Sign in to open Hybrid Function" : "Could not reach the PageCrew server";
+    const message = needsLogin
+      ? "Your PageCrew session may have expired. Sign in, then return to Hybrid Function."
+      : error.message || "The workspace could not be loaded. Please try again.";
+    root.innerHTML = `<section class="studio-hero"><div><h2>${title}</h2><p>${escapeHtml(message)}</p></div>
+      <div class="studio-actions">${needsLogin ? `<a class="studio-button" href="/">Sign in to PageCrew</a>` : ""}
+        <button class="studio-button secondary" id="studio-retry" type="button">Try again</button></div></section>`;
+    root.querySelector("#studio-retry").addEventListener("click", event => {
+      event.currentTarget.disabled = true;
+      refresh().catch(renderLoadError);
+    });
+  }
+
+  refresh().catch(renderLoadError);
 })();

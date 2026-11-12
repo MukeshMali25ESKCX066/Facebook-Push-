@@ -10,6 +10,11 @@
 .studio-page .nav-link span { width:20px; color:#cbd5e1; font-size:18px; text-align:center; }
 .studio-page .nav-link:hover,.studio-page .nav-link.active { background:#1e293b; color:#fff; }
 .studio-page .nav-link.active { box-shadow:inset 3px 0 0 var(--studio-blue); }
+.studio-module-nav { display:grid; gap:3px; margin:14px 0 0; padding:13px 0 0; border-top:1px solid #334155; }
+.studio-module-nav a { overflow:hidden; border-radius:7px; padding:8px 10px 8px 13px; color:#cbd5e1; font-size:11px; text-decoration:none; text-overflow:ellipsis; white-space:nowrap; }
+.studio-module-nav a:hover,.studio-module-nav a:focus-visible { background:#1e293b; color:#fff; outline:none; }
+.studio-module-kpis { margin:14px 0; }
+.studio-module-kpis .studio-kpi-value { font-size:20px; }
 .studio-back-link,.studio-top-link { color:#175cd3; font-size:12px; font-weight:700; text-decoration:none; }
 .studio-root { width:min(100%,1500px); margin:0 auto; padding:25px 28px 40px; }
 .studio-loading,.studio-empty { padding:27px; border:1px solid var(--studio-border); border-radius:13px; background:#fff; color:var(--studio-muted); text-align:center; }
@@ -81,11 +86,13 @@
   .studio-page .nav { width:100%; }
   .studio-page .nav-link { justify-content:center; padding:10px 0; font-size:0; }
   .studio-page .nav-link span { font-size:17px; }
+  .studio-module-nav { position:fixed; z-index:5; top:66px; right:0; left:64px; display:flex; gap:4px; overflow-x:auto; margin:0; padding:7px; border-top:0; border-bottom:1px solid var(--studio-border); background:#fff; }
+  .studio-module-nav a { flex:none; padding:8px 10px; color:#344054; }
   .studio-page .main { margin-left:64px; }
   .studio-page .topbar { height:auto; min-height:66px; padding:12px 15px; }
   .studio-page .topbar h1 { font-size:16px; }
   .studio-page .topbar p { font-size:10px; }
-  .studio-root { padding:14px 11px 27px; }
+  .studio-root { padding:60px 11px 27px; }
   .studio-grid { grid-template-columns:1fr; }
   .studio-hero { align-items:flex-start; flex-direction:column; padding:17px; }
   .studio-workflow .studio-panel-heading { flex-direction:column; }
