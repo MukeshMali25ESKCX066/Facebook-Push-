@@ -153,6 +153,11 @@ function buildDashboardFor(req, range) {
     });
 }
 
+router.getDashboardForWorkspace = (workspaceScopeId, preset = "last30") => {
+    const range = analyticsCore.dateRange({ range: preset });
+    return buildDashboardFor({ query: {}, workspaceScopeId }, range);
+};
+
 function addSyncLog(workspaceScopeId, platform, result) {
     analytics.syncLogs = Array.isArray(analytics.syncLogs) ? analytics.syncLogs : [];
     analytics.syncLogs.unshift({

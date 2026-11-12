@@ -44,6 +44,11 @@
 .scheduler-day { display:inline-flex; align-items:center; gap:5px; padding:6px 8px; border:1px solid #eaecf0; border-radius:7px; color:#475467; font-size:10px; }
 .scheduler-day input { accent-color:var(--scheduler-blue); }
 .scheduler-page-settings { display:grid; gap:8px; }
+.scheduler-auto-publish { display:flex; gap:11px; align-items:flex-start; margin:15px 0 4px; padding:13px; border:1px solid #b2ccff; border-radius:11px; background:#f0f6ff; color:#175cd3; cursor:pointer; }
+.scheduler-auto-publish input { margin-top:3px; accent-color:#1877f2; }
+.scheduler-auto-publish strong,.scheduler-auto-publish small { display:block; }
+.scheduler-auto-publish strong { font-size:12px; }
+.scheduler-auto-publish small { margin-top:4px; color:#475467; font-size:11px; line-height:1.45; }
 .scheduler-page-setting { display:grid; grid-template-columns:minmax(130px,1.3fr) repeat(3,minmax(110px,1fr)); gap:9px; align-items:center; padding:10px; border:1px solid #edf0f4; border-radius:9px; }
 .scheduler-page-setting strong { overflow:hidden; color:#344054; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .scheduler-page-setting label { display:grid; gap:4px; color:#667085; font-size:9px; }

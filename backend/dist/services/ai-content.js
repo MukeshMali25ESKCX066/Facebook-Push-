@@ -56,7 +56,8 @@ function buildContentPrompt(campaign, pages, settings) {
     };
     const requestedPages = pages.map(page => ({
         pageId: String(page.id),
-        pageName: String(page.name || "").slice(0, 120)
+        pageName: String(page.name || "").slice(0, 120),
+        articleUrl: String(page.articleUrl || campaign.articleUrl || "").slice(0, 1000)
     }));
 
     return [

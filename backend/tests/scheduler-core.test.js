@@ -110,6 +110,26 @@ test("requires approved content and a schedule that fits the Page limits", () =>
     }), /only 1 slots/);
 });
 
+test("automatic publishing queues generated draft content without requiring approval", () => {
+    const result = generateSchedule({
+        campaign,
+        settings: {
+            timezone: "America/New_York",
+            dailyPostLimit: 4,
+            minimumGapMinutes: 120,
+            postingDays: ["Tue", "Wed", "Thu"],
+            postingWindow: "All Day"
+        },
+        approvedContent: approvedContent.map(item => ({ ...item, status: "draft" })),
+        includeDrafts: true,
+        now: Date.parse("2026-11-20T00:00:00.000Z")
+    });
+
+    assert.equal(result.settings.autoPublish, true);
+    assert.equal(result.posts.length, 3);
+    assert.ok(result.posts.every(post => post.status === "scheduled"));
+});
+
 test("validates manual rescheduling against the Page's local daily limit and minimum gap", () => {
     const first = {
         id: "post-a",

@@ -1,6 +1,7 @@
 (function () {
   const root = document.getElementById("event-app");
-  const state = { campaigns: [], schedules: [], pages: [], editingId: "", article: {}, image: "", loadingPages: false };
+  const state = { campaigns: [], schedules: [], pages: [], library: { urls: [], images: [] }, editingId: "", article: {}, image: "", loadingPages: false };
+  const requestedCampaignId = new URLSearchParams(window.location.search).get("campaign") || "";
 
   function escapeHtml(value) {
     const node = document.createElement("span");
@@ -190,6 +191,7 @@
             <header class="event-panel-header"><span class="event-panel-icon">05</span><div><h3>Target Facebook Pages</h3><p>Select the connected Pages that have permission to publish.</p></div></header>
             <div class="event-pages-toolbar"><input class="event-page-search" id="event-page-search" placeholder="Search connected Pages"><button class="event-link-button" type="button" data-action="select-all">Select visible</button></div>
             <div id="event-pages-list" class="event-pages-list"><div class="event-pages-empty">Loading connected Facebook Pages…</div></div>
+            <div id="event-page-assets" class="event-page-assets"></div>
           </section>
         </div>
         <aside class="event-summary">
@@ -223,7 +225,14 @@
   function selectedPages() {
     return [...root.querySelectorAll('input[name="targetPage"]:checked')].map(input => {
       const page = state.pages.find(item => String(item.id) === input.value);
-      return { id: input.value, name: input.dataset.name, pictureUrl: page?.pictureUrl || "" };
+      const assets = root.querySelector(`[data-page-assets="${CSS.escape(input.value)}"]`);
+      return {
+        id: input.value,
+        name: input.dataset.name,
+        pictureUrl: page?.pictureUrl || "",
+        articleUrl: assets?.querySelector("[data-page-asset-url]")?.value || "",
+        libraryImageId: assets?.querySelector("[data-page-asset-image]")?.value || ""
+      };
     });
   }
 
@@ -236,19 +245,24 @@
     const url = data.get("articleUrl");
     root.querySelector("#event-summary-name").textContent = name;
     root.querySelector("#event-summary-date").textContent = date ? new Date(`${date}T12:00:00`).toLocaleDateString() : "Not set";
-    root.querySelector("#event-summary-article").textContent = url ? "URL added" : "Not added";
+    root.querySelector("#event-summary-article").textContent = url || selectedPages().some(page => page.articleUrl) ? "URL added" : "Not added";
     root.querySelector("#event-summary-pages").textContent = `${selectedPages().length} selected`;
   }
 
   async function renderPages() {
     const list = root.querySelector("#event-pages-list");
     try {
-      state.pages = await request("/api/pages");
+      [state.pages, state.library.urls, state.library.images] = await Promise.all([
+        request("/api/pages"),
+        request("/api/studio/urls"),
+        request("/api/studio/images")
+      ]);
       if (!state.pages.length) {
         list.innerHTML = `<div class="event-pages-empty">No connected Facebook Pages were found. Connect a Facebook account in PageCrew, then return here. Your campaign can still be saved as a draft.</div>`;
         return;
       }
-      const selected = new Set((state.campaigns.find(item => item.id === state.editingId)?.pages || []).map(page => page.id));
+      const savedPages = state.campaigns.find(item => item.id === state.editingId)?.pages || [];
+      const selected = new Set(savedPages.map(page => page.id));
       list.innerHTML = state.pages.map(page => `
         <label class="event-page-option" data-search="${escapeHtml(page.name.toLowerCase())}">
           <input type="checkbox" name="targetPage" value="${escapeHtml(page.id)}" data-name="${escapeHtml(page.name)}" ${selected.has(page.id) ? "checked" : ""}>
@@ -256,10 +270,49 @@
           <span class="event-page-info"><strong>${escapeHtml(page.name)}</strong><small>${escapeHtml(page.account || "Connected Facebook Page")}</small></span>
           <span class="event-page-state">${page.connected ? "Connected" : "Reconnect"}</span>
         </label>`).join("");
-      list.querySelectorAll('input[name="targetPage"]').forEach(input => input.addEventListener("change", updateSummary));
+      list.querySelectorAll('input[name="targetPage"]').forEach(input => input.addEventListener("change", () => {
+        renderPageAssetSelections(savedPages);
+        updateSummary();
+      }));
+      renderPageAssetSelections(savedPages);
       updateSummary();
     } catch (error) {
       list.innerHTML = `<div class="event-pages-empty">${escapeHtml(error.message)}${error.message.includes("login") ? " Please sign in to PageCrew and reopen this category." : ""}</div>`;
+    }
+  }
+
+  function renderPageAssetSelections(savedPages = []) {
+    const container = root.querySelector("#event-page-assets");
+    if (!container) return;
+    const selected = selectedPages();
+    if (!selected.length) {
+      container.innerHTML = "";
+      return;
+    }
+    const urlOptions = urlValue => `<option value="">Use campaign URL</option>${urlValue && !state.library.urls.some(item => item.url === urlValue)
+      ? `<option value="${escapeHtml(urlValue)}">${escapeHtml(urlValue)} (saved)</option>` : ""}${state.library.urls.map(item =>
+      `<option value="${escapeHtml(item.url)}">${escapeHtml(item.label || item.url)}</option>`).join("")}`;
+    const imageOptions = `<option value="">No library image</option>${state.library.images.map(item =>
+      `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}`;
+    container.innerHTML = `<div class="event-page-assets-heading"><strong>URL and image for each Page</strong>
+      <a class="event-link-button" href="/hybrid-studio.html">Manage libraries</a></div>
+      ${selected.map(page => {
+        const saved = savedPages.find(item => item.id === page.id) || {};
+        const urlValue = page.articleUrl || saved.articleUrl || "";
+        const imageValue = page.libraryImageId || saved.libraryImageId || "";
+        return `<div class="event-page-asset-row" data-page-assets="${escapeHtml(page.id)}">
+          <strong>${escapeHtml(page.name)}</strong>
+          <label>Article URL<select data-page-asset-url>${urlOptions(urlValue)}</select></label>
+          <label>Image library<select data-page-asset-image>${imageOptions}</select></label>
+          <span>${imageValue ? "Selected image will be used for this Page." : "Campaign image is used unless you select a library image."}</span>
+        </div>`;
+      }).join("")}`;
+    for (const row of container.querySelectorAll("[data-page-assets]")) {
+      const page = selected.find(item => item.id === row.dataset.pageAssets);
+      const saved = savedPages.find(item => item.id === row.dataset.pageAssets) || {};
+      row.querySelector("[data-page-asset-url]").value = page?.articleUrl || saved.articleUrl || "";
+      row.querySelector("[data-page-asset-image]").value = page?.libraryImageId || saved.libraryImageId || "";
+      row.querySelectorAll("select").forEach(select => select.addEventListener("change", updateSummary));
     }
   }
 
@@ -324,8 +377,8 @@
     if (status === "draft") return "";
     if (!values.eventName.trim()) return "Enter an event name.";
     if (!values.eventDate) return "Choose the event date.";
-    if (!values.articleUrl.trim()) return "Add an article URL.";
     if (!pages.length) return "Select at least one connected Facebook Page.";
+    if (!values.articleUrl.trim() && !pages.some(page => page.articleUrl)) return "Add a campaign URL or choose a URL for each selected Page.";
     if (values.startDate && values.endDate && values.endDate < values.startDate) return "Campaign end date must be on or after the start date.";
     if (values.endDate && values.endDate > values.eventDate) return "Campaign end date cannot be after the event date.";
     return "";
@@ -395,7 +448,9 @@
         request("/api/campaigns"),
         request("/api/scheduler")
       ]);
-      renderLanding();
+      const requestedCampaign = state.campaigns.find(item => item.id === requestedCampaignId);
+      if (requestedCampaign) renderForm(requestedCampaign);
+      else renderLanding();
     } catch (error) {
       root.innerHTML = `<section class="event-hero"><div class="event-hero-copy"><p class="event-eyebrow">PageCrew workspace</p><h2>Sign in to manage event campaigns</h2><p>${escapeHtml(error.message)}</p></div><a class="event-button" href="/">Open PageCrew</a></section>`;
     }

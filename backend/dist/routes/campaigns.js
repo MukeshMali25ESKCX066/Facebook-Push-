@@ -9,12 +9,16 @@ const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 const express = require("express");
 const auth_js_1 = require("./auth.js");
 const aiContent = require("../services/ai-content.js");
+const library = require("../services/library-store.js");
 
 const router = (0, express_1.Router)();
 const campaigns = [];
 exports.findCampaignForWorkspace = (id, workspaceId) =>
     campaigns.find(item => item.id === id && item.userId === workspaceId);
-const generatedImageDirectory = path.resolve(__dirname, "../../uploads/ai-generated");
+exports.getCampaignsForWorkspace = workspaceId => campaigns.filter(item => item.userId === workspaceId);
+exports.isLibraryImageInUse = (imageId, workspaceId) => campaigns.some(campaign =>
+    campaign.userId === workspaceId && (campaign.pages || []).some(page => page.libraryImageId === imageId));
+const generatedImageDirectory = library.generatedImageDirectory;
 
 function decodeHtml(value = "") {
     return value
@@ -201,9 +205,19 @@ function persistCampaignOrRespond(res) {
 
 function aiBriefChanged(campaign, body) {
     const nextPages = Array.isArray(body.pages)
-        ? body.pages.map(page => ({ id: String(page.id), name: String(page.name || "") }))
+        ? body.pages.map(page => ({
+            id: String(page.id),
+            name: String(page.name || ""),
+            articleUrl: String(page.articleUrl || ""),
+            libraryImageId: String(page.libraryImageId || "")
+        }))
         : [];
-    const currentPages = (campaign.pages || []).map(page => ({ id: String(page.id), name: String(page.name || "") }));
+    const currentPages = (campaign.pages || []).map(page => ({
+        id: String(page.id),
+        name: String(page.name || ""),
+        articleUrl: String(page.articleUrl || ""),
+        libraryImageId: String(page.libraryImageId || "")
+    }));
     return campaign.eventName !== String(body.eventName || "").trim()
         || campaign.eventDate !== String(body.eventDate || "")
         || campaign.eventCategory !== String(body.eventCategory || "")
@@ -328,6 +342,9 @@ function logAiFailure(req, operation, error) {
 
 function toContentRecord(campaign, page, post, existing) {
     const now = new Date().toISOString();
+    const libraryImage = page?.libraryImageId
+        ? library.getImageForWorkspace(page.libraryImageId, campaign.userId)
+        : null;
     return {
         id: existing?.id || randomUUID(),
         pageId: String(page.id),
@@ -337,8 +354,11 @@ function toContentRecord(campaign, page, post, existing) {
         caption: post.caption,
         cta: post.cta,
         hashtags: post.hashtags,
-        articleUrl: campaign.articleUrl,
-        featuredImage: campaign.featuredImage || "",
+        articleUrl: String(page?.articleUrl || campaign.articleUrl || ""),
+        featuredImage: libraryImage
+            ? `/api/studio/images/${encodeURIComponent(libraryImage.id)}/file`
+            : campaign.featuredImage || "",
+        libraryImageId: libraryImage?.id || "",
         overlayText: existing?.overlayText || "",
         images: existing?.images || [],
         selectedImageId: existing?.selectedImageId || "",
@@ -363,7 +383,8 @@ router.post("/:id/ai/generate", async (req, res) => {
     const campaign = findCampaign(req.params.id, req.workspaceId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
     if (!requireEncryptedPersistence(res)) return;
-    if (!campaign.eventName || !campaign.articleUrl || !Array.isArray(campaign.pages) || campaign.pages.length === 0) {
+    if (!campaign.eventName || !Array.isArray(campaign.pages) || campaign.pages.length === 0 ||
+        (!campaign.articleUrl && !campaign.pages.some(page => page.articleUrl))) {
         return res.status(400).json({ error: "Complete event and article selection and choose at least one Page first." });
     }
     if (campaign.pages.length > 30) return res.status(400).json({ error: "Generate content for up to 30 Pages per campaign." });
@@ -608,8 +629,11 @@ function validateCampaign(body, allowDraft = false) {
     if (!allowDraft) {
         if (!String(body.eventName || "").trim()) errors.push("Event name is required.");
         if (!validDate(body.eventDate)) errors.push("A valid event date is required.");
-        if (!String(body.articleUrl || "").trim()) errors.push("Article URL is required.");
         if (!Array.isArray(body.pages) || body.pages.length === 0) errors.push("Select at least one Facebook Page.");
+        if (!String(body.articleUrl || "").trim() &&
+            !(Array.isArray(body.pages) && body.pages.some(page => String(page.articleUrl || "").trim()))) {
+            errors.push("Choose an article URL for this campaign or each selected Page.");
+        }
     }
     for (const field of ["eventDate", "startDate", "endDate"]) {
         if (body[field] && !validDate(body[field])) errors.push(`${field} must be a valid date.`);
@@ -626,7 +650,36 @@ function validateCampaign(body, allowDraft = false) {
             errors.push(error.message);
         }
     }
+    if (Array.isArray(body.pages)) {
+        for (const page of body.pages) {
+            if (!page.articleUrl) continue;
+            try {
+                parseHttpUrl(String(page.articleUrl));
+            } catch (error) {
+                errors.push(`${String(page.name || "Page")} URL: ${error.message}`);
+            }
+        }
+    }
     return errors;
+}
+
+function normalizePages(input, workspaceId) {
+    if (!Array.isArray(input)) return [];
+    return input.map(page => {
+        const articleUrl = String(page.articleUrl || "").trim();
+        if (articleUrl) parseHttpUrl(articleUrl);
+        const libraryImageId = String(page.libraryImageId || "");
+        if (libraryImageId && !library.getImageForWorkspace(libraryImageId, workspaceId)) {
+            throw new Error("Choose a campaign image from your own workspace library.");
+        }
+        return {
+            id: String(page.id),
+            name: String(page.name || ""),
+            pictureUrl: String(page.pictureUrl || ""),
+            articleUrl,
+            libraryImageId
+        };
+    });
 }
 
 router.post("/", async (req, res) => {
@@ -638,6 +691,12 @@ router.post("/", async (req, res) => {
         return;
     }
     if (!requireEncryptedPersistence(res)) return;
+    let pages;
+    try {
+        pages = normalizePages(body.pages, req.workspaceId);
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
     const now = new Date().toISOString();
     const campaign = {
         id: randomUUID(),
@@ -656,7 +715,7 @@ router.post("/", async (req, res) => {
         articleUrl: String(body.articleUrl || "").trim(),
         article: body.article || {},
         featuredImage: body.featuredImage || "",
-        pages: Array.isArray(body.pages) ? body.pages.map(page => ({ id: String(page.id), name: String(page.name), pictureUrl: String(page.pictureUrl || "") })) : [],
+        pages,
         createdAt: now,
         updatedAt: now
     };
@@ -679,6 +738,12 @@ router.put("/:id", async (req, res) => {
         return;
     }
     if (!requireEncryptedPersistence(res)) return;
+    let pages;
+    try {
+        pages = normalizePages(body.pages, req.workspaceId);
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
     const resetAiContent = Array.isArray(campaign.aiContent) && campaign.aiContent.length > 0 && aiBriefChanged(campaign, body);
     if (resetAiContent && campaign.aiContent.some(item => item.status === "approved")) {
         return res.status(409).json({ error: "Unapprove this campaign's AI content before changing its event, article, image, or selected Pages." });
@@ -701,7 +766,7 @@ router.put("/:id", async (req, res) => {
         articleUrl: String(body.articleUrl || "").trim(),
         article: body.article || {},
         featuredImage: body.featuredImage || "",
-        pages: Array.isArray(body.pages) ? body.pages.map(page => ({ id: String(page.id), name: String(page.name), pictureUrl: String(page.pictureUrl || "") })) : [],
+        pages,
         status: body.status === "ready" ? "ready" : "draft",
         updatedAt: new Date().toISOString()
     });

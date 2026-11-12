@@ -137,12 +137,14 @@
     const campaign = state.campaign;
     const defaults = dateDefaults();
     const readyCount = state.approvedContent.filter(item => item.status === "approved").length;
+    const availableCount = state.approvedContent.length;
     const savedSettings = state.schedule?.settings || {};
+    const autoPublish = savedSettings.autoPublish !== false;
     root.innerHTML = `
       <section class="scheduler-hero">
         <div><p class="scheduler-eyebrow">Step 3 of 5 · Schedule strategy</p>
           <h2>${escapeHtml(campaign.campaignName || campaign.eventName || "Campaign schedule")}</h2>
-          <p>${escapeHtml(campaign.eventName || "Event")} · ${escapeHtml(campaign.eventDate)} · ${state.campaign.pages.length} selected Pages. Schedule only approved content; review and approve the timetable before publishing begins.</p>
+          <p>${escapeHtml(campaign.eventName || "Event")} · ${escapeHtml(campaign.eventDate)} · ${state.campaign.pages.length} selected Pages. Choose automatic publishing or review the schedule manually.</p>
         </div>
         <a class="scheduler-button secondary" href="/ai-content.html?campaign=${encodeURIComponent(campaignId)}">← AI content</a>
       </section>
@@ -163,20 +165,30 @@
               <label class="scheduler-field">Default minimum gap<select name="minimumGapMinutes">${[30, 60, 120, 240].map(value => `<option value="${value}" ${Number(savedSettings.minimumGapMinutes || 120) === value ? "selected" : ""}>${value} minutes</option>`).join("")}</select></label>
               <label class="scheduler-field">Scheduling mode<select name="schedulingMode"><option value="smart" ${savedSettings.schedulingMode !== "manual" ? "selected" : ""}>Smart Scheduling</option><option value="manual" ${savedSettings.schedulingMode === "manual" ? "selected" : ""}>Manual Scheduling</option></select></label>
             </div>
+            <label class="scheduler-auto-publish"><input type="checkbox" name="autoPublish" ${autoPublish ? "checked" : ""}>
+              <span><strong>Auto-start and publish without schedule review</strong><small>Generated posts will be queued immediately and published at their scheduled times. Pause or stop the campaign from the campaign list.</small></span>
+            </label>
             <div class="scheduler-days" aria-label="Posting days">${weekdayNames.map((day, index) => `<label class="scheduler-day"><input type="checkbox" name="postingDays" value="${day}" ${(savedSettings.postingDays || weekdayNames.slice(0, 5)).includes(day) ? "checked" : ""}>${day}</label>`).join("")}</div>
             <div class="scheduler-panel-heading" style="margin-top:16px"><div><h3>Per-Page frequency and timezone</h3><p>Each Page has an independent daily cap, minimum gap, and audience timezone.</p></div></div>
             <div class="scheduler-page-settings">${pageSettingsForm()}</div>
             <p class="scheduler-inline-note">Best-time recommendations use your selected timezone and posting window when historical Page Insights are unavailable. Page Insights are not currently connected to this scheduler, so no universal “best” hour is assumed.</p>
-            <div class="scheduler-actions"><button class="scheduler-button" type="submit" ${state.busy || !readyCount ? "disabled" : ""}>${state.busy ? "Generating…" : "Generate schedule preview"}</button><span class="scheduler-inline-note">${readyCount} approved post${readyCount === 1 ? "" : "s"} available</span></div>
+            <div class="scheduler-actions"><button class="scheduler-button" type="submit" ${state.busy || (autoPublish ? !availableCount : !readyCount) ? "disabled" : ""}>${state.busy ? "Generating…" : autoPublish ? "Start automatic campaign" : "Generate schedule preview"}</button><span class="scheduler-inline-note">${availableCount} generated post${availableCount === 1 ? "" : "s"} · ${readyCount} approved</span></div>
             ${state.schedule ? `<div class="scheduler-actions"><button class="scheduler-button secondary" type="button" data-action="cancel-settings">← Back to schedule preview</button></div>` : ""}
           </form>
         </div>
-        <aside class="scheduler-summary"><h3>Schedule readiness</h3><p>Campaign posts need explicit approval before any scheduled publishing starts.</p>
-          <dl><div><dt>Facebook Pages</dt><dd>${state.campaign.pages.length}</dd></div><div><dt>Approved posts</dt><dd>${readyCount}</dd></div><div><dt>Event date</dt><dd>${escapeHtml(campaign.eventDate)}</dd></div><div><dt>Publishing status</dt><dd>Preview only</dd></div></dl>
-          <p class="scheduler-summary-note">Generated previews are saved securely. Nothing is sent to Facebook until the schedule is approved.</p>
+        <aside class="scheduler-summary"><h3>Schedule readiness</h3><p>Automatic mode starts generated posts immediately; manual mode requires approved content and a reviewed schedule.</p>
+          <dl><div><dt>Facebook Pages</dt><dd>${state.campaign.pages.length}</dd></div><div><dt>Approved posts</dt><dd>${readyCount}</dd></div><div><dt>Event date</dt><dd>${escapeHtml(campaign.eventDate)}</dd></div><div><dt>Publishing status</dt><dd>${autoPublish ? "Auto-start when submitted" : "Manual review"}</dd></div></dl>
+          <p class="scheduler-summary-note">Automatic mode publishes only at calculated future time slots. Pause or stop it any time from Event Campaigns.</p>
         </aside>
       </div>`;
-    root.querySelector("#scheduler-settings-form").addEventListener("submit", generateSchedule);
+    const form = root.querySelector("#scheduler-settings-form");
+    form.addEventListener("submit", generateSchedule);
+    form.elements.autoPublish.addEventListener("change", () => {
+      const automatic = form.elements.autoPublish.checked;
+      const button = form.querySelector('[type="submit"]');
+      button.disabled = state.busy || (automatic ? !availableCount : !readyCount);
+      button.textContent = automatic ? "Start automatic campaign" : "Generate schedule preview";
+    });
     showMessage(state.message, state.messageType);
   }
 
@@ -367,7 +379,8 @@
         postingWindow: values.postingWindow,
         dailyPostLimit: Number(values.dailyPostLimit),
         minimumGapMinutes: Number(values.minimumGapMinutes),
-        schedulingMode: values.schedulingMode
+        schedulingMode: values.schedulingMode,
+        autoPublish: values.autoPublish === "on"
       },
       pageSettings
     };
@@ -382,12 +395,14 @@
     try {
       state.schedule = await request("/api/scheduler/generate", {
         method: "POST",
-        body: JSON.stringify({ campaignId, settings, pageSettings })
+        body: JSON.stringify({ campaignId, settings, pageSettings, autoPublish: settings.autoPublish })
       });
       state.showSettings = false;
       state.cursorDate = state.schedule.settings.startDate;
       state.busy = false;
-      state.message = "Schedule preview saved. Review each post and approve the schedule when it is ready.";
+      state.message = state.schedule.status === "active"
+        ? "Campaign started. Posts will publish automatically at their scheduled Page-local times."
+        : "Schedule preview saved. Review each post and start the campaign when it is ready.";
       state.messageType = "success";
       render();
     } catch (error) {

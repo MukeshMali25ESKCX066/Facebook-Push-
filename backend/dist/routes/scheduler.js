@@ -11,10 +11,11 @@ const postsRoute = require("./posts.js");
 const { publishToPage } = require("../services/meta.js");
 const schedulerCore = require("../services/scheduler-core.js");
 const schedulerWorker = require("../services/scheduler-worker.js");
+const library = require("../services/library-store.js");
 
 const router = Router();
 const schedules = [];
-const generatedImageDirectory = path.resolve(__dirname, "../../uploads/ai-generated");
+const generatedImageDirectory = library.generatedImageDirectory;
 
 function persistSchedules() {
     return saveSchedules();
@@ -48,11 +49,13 @@ function saveOrRespond(res) {
 }
 
 function publicPost(post, campaignId) {
-    const { imageId, ...visible } = post;
+    const { imageId, libraryImageId, ...visible } = post;
     return {
         ...visible,
         ...(imageId ? {
             imageUrl: `/api/campaigns/${encodeURIComponent(campaignId)}/ai/content/${encodeURIComponent(post.contentId)}/images/${encodeURIComponent(imageId)}`
+        } : libraryImageId ? {
+            imageUrl: `/api/studio/images/${encodeURIComponent(libraryImageId)}/file`
         } : {})
     };
 }
@@ -90,15 +93,23 @@ function findPageToken(workspaceScopeId, pageId) {
 async function publishScheduledPost(schedule, post) {
     const token = findPageToken(schedule.workspaceScopeId, post.pageId);
     if (!token) throw new Error("No Page access token. Reconnect Facebook and reload your Pages.");
+    const libraryImage = post.libraryImageId
+        ? library.getImageForWorkspace(post.libraryImageId, schedule.workspaceScopeId)
+        : null;
+    if (post.libraryImageId && !libraryImage) {
+        throw new Error("The selected campaign library image is no longer available.");
+    }
     const mediaPath = post.imageId
         ? path.join(generatedImageDirectory, `${post.imageId}.png`)
-        : "";
-    if (post.imageId && !existsSync(mediaPath)) {
+        : libraryImage
+            ? path.join(library.imageDirectory, libraryImage.fileName)
+            : "";
+    if (mediaPath && !existsSync(mediaPath)) {
         throw new Error("The selected campaign image is no longer available. Edit the post before retrying.");
     }
     return publishToPage(post.pageId, token, post.content, mediaPath ? {
         path: mediaPath,
-        mimeType: "image/png",
+        mimeType: libraryImage?.mimeType || "image/png",
         originalName: `${post.pageName || "campaign"}.png`
     } : undefined);
 }
@@ -183,6 +194,9 @@ setTimeout(() => {
 
 router.getSchedulesForWorkspace = workspaceScopeId =>
     schedules.filter(schedule => schedule.workspaceScopeId === workspaceScopeId);
+router.isLibraryImageInUse = (imageId, workspaceScopeId) => schedules.some(schedule =>
+    schedule.workspaceScopeId === workspaceScopeId &&
+    (schedule.posts || []).some(post => post.libraryImageId === imageId));
 
 router.use(requireWorkspace);
 
@@ -210,7 +224,8 @@ router.post("/generate", (req, res) => {
             campaign,
             settings: body.settings || {},
             pageSettings: body.pageSettings || {},
-            approvedContent: Array.isArray(campaign.aiContent) ? campaign.aiContent : []
+            approvedContent: Array.isArray(campaign.aiContent) ? campaign.aiContent : [],
+            includeDrafts: body.autoPublish === true
         });
         assertNoPageConflicts(generated, req.workspaceScopeId, existing);
         const now = new Date().toISOString();
@@ -218,7 +233,7 @@ router.post("/generate", (req, res) => {
             id: randomUUID(),
             campaignId,
             workspaceScopeId: req.workspaceScopeId,
-            status: "draft",
+            status: body.autoPublish === true ? "active" : "draft",
             settings: generated.settings,
             pages: generated.pages,
             posts: generated.posts.map(post => ({

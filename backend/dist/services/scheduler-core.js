@@ -164,7 +164,7 @@ function makePageSlots(pageConfig, startDate, endDate, postingDays, windowName, 
     return slots;
 }
 
-function generateSchedule({ campaign, settings, pageSettings, approvedContent, now = Date.now() }) {
+function generateSchedule({ campaign, settings, pageSettings, approvedContent, includeDrafts = false, now = Date.now() }) {
     const eventDate = assertDate(campaign.eventDate, "Event date").toISOString().slice(0, 10);
     const timezone = validateTimeZone(settings.timezone || campaign.timezone || "UTC");
     const startDate = assertDate(settings.startDate || campaign.startDate || addDays(eventDate, -2), "Start date").toISOString().slice(0, 10);
@@ -179,14 +179,18 @@ function generateSchedule({ campaign, settings, pageSettings, approvedContent, n
     const pageById = new Map(pages.map(page => [String(page.id), page]));
     const approvedByPage = new Map();
     for (const content of approvedContent) {
-        if (content.status !== "approved") continue;
+        if (!includeDrafts && content.status !== "approved") continue;
         const pageId = String(content.pageId || "");
         if (!pageById.has(pageId)) continue;
         const items = approvedByPage.get(pageId) || [];
         items.push(content);
         approvedByPage.set(pageId, items);
     }
-    if (!approvedByPage.size) throw new Error("Approve at least one Page post before generating a schedule.");
+    if (!approvedByPage.size) {
+        throw new Error(includeDrafts
+            ? "Generate at least one Page post before starting automatic publishing."
+            : "Approve at least one Page post before generating a schedule.");
+    }
 
     const posts = [];
     const summaries = [];
@@ -231,11 +235,12 @@ function generateSchedule({ campaign, settings, pageSettings, approvedContent, n
                 utmUrl,
                 content: buildCaption(content, articleUrl, utmUrl),
                 imageId: content.selectedImageId || "",
+                libraryImageId: content.libraryImageId || "",
                 postType,
                 purpose: getPostPurpose(postType),
                 scheduledAt: slot.scheduledAt.toISOString(),
                 timezone: config.timezone,
-                status: "draft",
+                status: includeDrafts ? "scheduled" : "draft",
                 attemptCount: 0
             });
         });
@@ -253,6 +258,7 @@ function generateSchedule({ campaign, settings, pageSettings, approvedContent, n
             dailyPostLimit: Number(settings.dailyPostLimit || 4),
             minimumGapMinutes: Number(settings.minimumGapMinutes || 120),
             schedulingMode: settings.schedulingMode === "manual" ? "manual" : "smart",
+            autoPublish: includeDrafts,
             recommendationsSource: "configured-timezone-window"
         },
         pages: summaries,
