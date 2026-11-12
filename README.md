@@ -8,7 +8,7 @@ PageCrew is organized as a frontend/backend project:
 - `backend/dist/services/ai-content.js` and `frontend/public/ai-content.*` implement the campaign AI content workflow.
 - `backend/dist/services/scheduler-core.js`, `backend/dist/routes/scheduler.js`, and `frontend/public/scheduler.*` implement event-based, per-Page scheduling, calendar review, and publishing controls.
 - `backend/dist/services/analytics-core.js`, `backend/dist/services/analytics-integrations.js`, `backend/dist/routes/analytics.js`, and `frontend/public/analytics.*` implement PageCrew publishing analytics, optional GA4 traffic sync, reports, and reviewed optimization suggestions.
-- `frontend/public/hybrid-studio.*` and `backend/dist/routes/studio.js` provide the Hybrid Campaign Studio dashboard and workspace-scoped URL/image libraries. Campaign setup lets you explicitly assign each library URL and image to each selected Page.
+- `frontend/public/hybrid-studio.*` and `backend/dist/routes/studio.js` provide the Hybrid Function workflow dashboard and workspace-scoped URL/image libraries. Its step-by-step guide links the existing Page connection, campaign, AI content, scheduler, queue, and analytics screens.
 
 ## Run locally
 
@@ -17,7 +17,7 @@ PageCrew is organized as a frontend/backend project:
 3. In a separate terminal at the project root, run `python serve-pagecrew.py`.
 4. Open <http://127.0.0.1:5173>.
 
-Open `/hybrid-studio.html` for the dashboard, asset libraries, campaign controls, and upcoming queue. Import URLs and upload authorized images there, then explicitly assign the desired assets per Page during campaign setup; assets are not automatically reused across Pages. Campaigns, generated content, settings, provider usage, and generation errors are stored in encrypted persistence. Configure optional `GEMINI_*_USD_*` and `OPENAI_*_USD_*` rate values using current provider pricing to record estimated USD costs; estimates are omitted when rates are unset.
+Open `/hybrid-studio.html` (Hybrid Function in the navigation) for the step-by-step workflow, dashboard, asset libraries, campaign controls, and upcoming queue. Import URLs and upload authorized images there, then review Page-level asset assignments during campaign setup. Campaigns, generated content, settings, provider usage, and generation errors are stored in encrypted persistence. Configure optional `GEMINI_*_USD_*` and `OPENAI_*_USD_*` rate values using current provider pricing to record estimated USD costs; estimates are omitted when rates are unset.
 
 Run backend unit tests with `npm test` from `backend/`.
 
