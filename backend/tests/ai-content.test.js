@@ -281,26 +281,45 @@ test("reads HTTP 429, 503 and invalid-key details from SDK error properties", ()
     assert.doesNotMatch(sensitiveFailure.providerErrorMessage, /secret-gemini-key|private-token|private-cookie/);
 });
 
-test("annotates malformed Gemini responses with provider duration but no provider HTTP error", async () => {
+test("preserves parser failures and records only safe Gemini response metadata", async () => {
     const previousKey = process.env.GEMINI_API_KEY;
     const previousProvider = process.env.AI_PROVIDER;
     process.env.GEMINI_API_KEY = "test-only-key";
     process.env.AI_PROVIDER = "gemini";
+    const responseText = '{"apiKey":"test-only-key","caption":"PRIVATE_CAMPAIGN_TEXT", invalid}';
     try {
         await assert.rejects(
             aiContent.generateContent(campaign, pages, aiContent.validateSettings({}), async () => Response.json({
                 candidates: [{
-                    content: { role: "model", parts: [{ text: "not valid JSON" }] }
+                    content: { role: "model", parts: [{ text: responseText }] },
+                    finishReason: "MAX_TOKENS",
+                    safetyRatings: [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", blocked: true }]
                 }]
             })),
             error => {
                 assert.match(error.message, /invalid response/i);
+                assert.ok(error.cause instanceof SyntaxError);
+                assert.equal(error.parserErrorName, "SyntaxError");
+                assert.match(error.parserErrorMessage, /position \d+ \(line \d+, column \d+\)/);
                 assert.equal(error.providerStatus, null);
                 assert.equal(error.providerCode, null);
                 assert.equal(error.providerTimeout, false);
                 assert.equal(error.providerErrorName, "Error");
                 assert.equal(error.providerErrorConstructorName, "Error");
                 assert.ok(Number.isFinite(error.providerDurationMs));
+                assert.deepEqual(error.responseDiagnostics, {
+                    model: "gemini-3.6-flash",
+                    candidateCount: 1,
+                    candidateFinishReason: "MAX_TOKENS",
+                    blockReason: null,
+                    safetyBlockReasons: ["HARM_CATEGORY_DANGEROUS_CONTENT"],
+                    responseTextLength: responseText.length,
+                    jsonParsingSucceeded: false
+                });
+                assert.doesNotMatch(JSON.stringify({
+                    parserErrorMessage: error.parserErrorMessage,
+                    responseDiagnostics: error.responseDiagnostics
+                }), /PRIVATE_CAMPAIGN_TEXT|test-only-key|apiKey/);
                 return true;
             }
         );

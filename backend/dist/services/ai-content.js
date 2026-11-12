@@ -84,12 +84,50 @@ function buildContentPrompt(campaign, pages, settings) {
     ];
 }
 
-function parseContentResponse(content, pages, settings) {
+function safeResponseLabel(value, limit = 100) {
+    const text = String(value || "");
+    return text.length <= limit && /^[A-Z0-9_]+$/.test(text) ? text : null;
+}
+
+function getResponseDiagnostics(response, model, content) {
+    const candidates = Array.isArray(response?.candidates) ? response.candidates : [];
+    const candidate = candidates[0];
+    const modelName = String(model || "");
+    const safetyBlockReasons = (Array.isArray(candidate?.safetyRatings) ? candidate.safetyRatings : [])
+        .filter(rating => rating?.blocked === true)
+        .map(rating => safeResponseLabel(rating.category, 80))
+        .filter(Boolean);
+    return {
+        model: /^(?:models\/)?gemini-[A-Za-z0-9._/-]+$/.test(modelName) ? modelName : null,
+        candidateCount: candidates.length,
+        candidateFinishReason: safeResponseLabel(candidate?.finishReason, 80),
+        blockReason: safeResponseLabel(response?.promptFeedback?.blockReason, 80),
+        safetyBlockReasons,
+        responseTextLength: content.length,
+        jsonParsingSucceeded: false
+    };
+}
+
+function parserDiagnosticMessage(error) {
+    const message = String(error?.message || "");
+    const position = message.match(/\bposition\s+(\d+)(?:\s+\(line\s+(\d+)\s+column\s+(\d+)\))?/i);
+    if (!position) return "JSON parsing failed; parser position unavailable.";
+    const lineColumn = position[2] && position[3] ? ` (line ${position[2]}, column ${position[3]})` : "";
+    return `JSON parsing failed at position ${position[1]}${lineColumn}.`;
+}
+
+function parseContentResponse(content, pages, settings, responseDiagnostics = null) {
     let parsed;
     try {
         parsed = JSON.parse(content);
-    } catch {
-        throw new Error("The AI provider returned an invalid response. Please try again.");
+    } catch (cause) {
+        const error = new Error("The AI provider returned an invalid response. Please try again.", { cause });
+        error.parserErrorName = String(cause?.name || "SyntaxError").slice(0, 80);
+        error.parserErrorMessage = parserDiagnosticMessage(cause);
+        error.responseDiagnostics = responseDiagnostics
+            ? { ...responseDiagnostics, jsonParsingSucceeded: false }
+            : { jsonParsingSucceeded: false };
+        throw error;
     }
 
     const posts = Array.isArray(parsed) ? parsed : parsed?.posts;
@@ -349,8 +387,9 @@ async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
     try {
         const content = response.text;
         if (typeof content !== "string") throw new Error("The AI provider returned an empty response. Please try again.");
+        const responseDiagnostics = getResponseDiagnostics(response, provider.model, content);
         return {
-            posts: parseContentResponse(content, pages, settings),
+            posts: parseContentResponse(content, pages, settings, responseDiagnostics),
             usage: {
                 provider: provider.provider,
                 model: response.modelVersion || provider.model,
@@ -360,7 +399,11 @@ async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
         };
     } catch (cause) {
         const error = cause instanceof Error ? cause : new Error("Gemini returned an invalid response.");
-        throw attachProviderDiagnostics(error, getProviderErrorDetails(error, provider.apiKey, providerDurationMs));
+        attachProviderDiagnostics(error, getProviderErrorDetails(error, provider.apiKey, providerDurationMs));
+        if (cause?.responseDiagnostics) error.responseDiagnostics = cause.responseDiagnostics;
+        if (cause?.parserErrorName) error.parserErrorName = cause.parserErrorName;
+        if (cause?.parserErrorMessage) error.parserErrorMessage = cause.parserErrorMessage;
+        throw error;
     }
 }
 

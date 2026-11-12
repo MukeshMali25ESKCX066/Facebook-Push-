@@ -318,6 +318,9 @@ function logAiFailure(req, operation, error) {
         providerCode: String(error.providerCode || "").slice(0, 80) || null,
         timeout: error.providerTimeout === true,
         durationMs: Number.isFinite(error.providerDurationMs) ? error.providerDurationMs : null,
+        parserErrorName: String(error.parserErrorName || "").slice(0, 80) || null,
+        parserErrorMessage: String(error.parserErrorMessage || "").slice(0, 160) || null,
+        responseDiagnostics: error.responseDiagnostics || null,
         errorMessage: String(error.providerErrorMessage || error.message || "Gemini request failed.").slice(0, 300),
         message: String(error.message || "Gemini request failed.").slice(0, 300)
     }));

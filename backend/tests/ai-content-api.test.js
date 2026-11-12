@@ -32,6 +32,9 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     auth.getWorkspaceScopeId = async () => "workspace:test-ai-api";
     let providerRequest;
     let simulatedProviderErrorStatus = 0;
+    let simulatedResponseText = null;
+    let simulatedFinishReason = "STOP";
+    let simulatedBlockReason = null;
     global.fetch = async (url, options) => {
         const requestUrl = new URL(String(url));
         if (requestUrl.hostname !== "generativelanguage.googleapis.com") {
@@ -53,7 +56,7 @@ test("page-wise generation API calls Gemini through the official SDK without an 
                 content: {
                     role: "model",
                     parts: [{
-                        text: JSON.stringify({
+                        text: simulatedResponseText || JSON.stringify({
                             posts: [
                                 { pageId: "page-a", angle: "Family traditions", caption: "Explore the traditions families share this Thanksgiving.", cta: "Read the guide", hashtags: ["Thanksgiving", "FamilyTraditions"] },
                                 { pageId: "page-b", angle: "Gratitude", caption: "Discover a fresh perspective on gratitude this holiday.", cta: "Discover more", hashtags: ["Gratitude", "Holiday"] }
@@ -61,8 +64,10 @@ test("page-wise generation API calls Gemini through the official SDK without an 
                         })
                     }]
                 },
-                finishReason: "STOP"
+                finishReason: simulatedFinishReason,
+                safetyRatings: [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", blocked: true }]
             }],
+            promptFeedback: simulatedBlockReason ? { blockReason: simulatedBlockReason } : undefined,
             usageMetadata: { promptTokenCount: 150, candidatesTokenCount: 90 }
         });
     };
@@ -130,6 +135,51 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     assert.match(providerRequest.url, /generativelanguage\.googleapis\.com\/v1\/models\/gemini-3\.6-flash:generateContent/);
     assert.equal(new Headers(providerRequest.options.headers).get("x-goog-api-key"), "test-api-route-gemini-key");
 
+    const requestId = "ad5f6e5c-ecce-44c0-8247-b56f64355732";
+    const malformedGeminiText = '{"apiKey":"test-api-route-gemini-key","campaign":"PRIVATE_CAMPAIGN_TEXT", invalid}';
+    simulatedResponseText = malformedGeminiText;
+    simulatedResponseText = malformedGeminiText;
+    simulatedFinishReason = "MAX_TOKENS";
+    simulatedBlockReason = "SAFETY";
+    const diagnosticLogs = [];
+    const originalParseConsoleError = console.error;
+    console.error = message => diagnosticLogs.push(String(message));
+    let malformedResponse;
+    try {
+        malformedResponse = await fetch(`${baseUrl}/${campaign.id}/ai/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-request-id": requestId },
+            body: JSON.stringify({ settings: { goal: "Website Traffic", hashtags: true } })
+        });
+    } finally {
+        console.error = originalParseConsoleError;
+        simulatedResponseText = null;
+        simulatedFinishReason = "STOP";
+        simulatedBlockReason = null;
+    }
+    assert.equal(malformedResponse.status, 502);
+    const parseDiagnostic = diagnosticLogs.map(line => {
+        try {
+            return JSON.parse(line);
+        } catch {
+            return null;
+        }
+    }).find(item => item?.event === "ai_request_failed");
+    assert.ok(parseDiagnostic);
+    assert.equal(parseDiagnostic.requestId, requestId);
+    assert.equal(parseDiagnostic.parserErrorName, "SyntaxError");
+    assert.match(parseDiagnostic.parserErrorMessage, /position \d+ \(line \d+, column \d+\)/);
+    assert.deepEqual(parseDiagnostic.responseDiagnostics, {
+        model: "gemini-3.6-flash",
+        candidateCount: 1,
+        candidateFinishReason: "MAX_TOKENS",
+        blockReason: "SAFETY",
+        safetyBlockReasons: ["HARM_CATEGORY_DANGEROUS_CONTENT"],
+        responseTextLength: malformedGeminiText.length,
+        jsonParsingSucceeded: false
+    });
+    assert.doesNotMatch(JSON.stringify(parseDiagnostic), /PRIVATE_CAMPAIGN_TEXT|test-api-route-gemini-key|apiKey/);
+
     const healthResponse = await fetch(`${baseUrl}/ai/health`, { method: "POST" });
     assert.equal(healthResponse.status, 200);
     const health = await healthResponse.json();
@@ -140,21 +190,21 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     assert.equal(JSON.stringify(health).includes("test-api-route-gemini-key"), false);
 
     simulatedProviderErrorStatus = 401;
-    const requestId = "638ad8e4-c023-4539-8f8d-acd1f0a96e21";
-    const diagnosticLogs = [];
-    const originalConsoleError = console.error;
-    console.error = message => diagnosticLogs.push(String(message));
+    const authRequestId = "638ad8e4-c023-4539-8f8d-acd1f0a96e21";
+    const authDiagnosticLogs = [];
+    const originalAuthConsoleError = console.error;
+    console.error = message => authDiagnosticLogs.push(String(message));
     let failedAuthResponse;
     try {
         failedAuthResponse = await fetch(`${baseUrl}/ai/health`, {
             method: "POST",
-            headers: { "x-request-id": requestId }
+            headers: { "x-request-id": authRequestId }
         });
     } finally {
-        console.error = originalConsoleError;
+        console.error = originalAuthConsoleError;
     }
     assert.equal(failedAuthResponse.status, 401);
-    const diagnostic = diagnosticLogs.map(line => {
+    const diagnostic = authDiagnosticLogs.map(line => {
         try {
             return JSON.parse(line);
         } catch {
@@ -162,7 +212,7 @@ test("page-wise generation API calls Gemini through the official SDK without an 
         }
     }).find(item => item?.event === "ai_request_failed");
     assert.ok(diagnostic);
-    assert.equal(diagnostic.requestId, requestId);
+    assert.equal(diagnostic.requestId, authRequestId);
     assert.equal(diagnostic.providerStatus, 401);
     assert.equal(diagnostic.providerCode, "UNAUTHENTICATED");
     assert.equal(diagnostic.timeout, false);
