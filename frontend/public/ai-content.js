@@ -3,6 +3,11 @@
   const campaignId = new URLSearchParams(window.location.search).get("campaign") || "";
   const state = { campaign: null, settings: null, content: [], usage: [], busy: false, message: "", messageType: "" };
 
+  function createRequestId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    return `pc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
   function escapeHtml(value) {
     const node = document.createElement("span");
     node.textContent = String(value == null ? "" : value);
@@ -16,13 +21,37 @@
   }
 
   async function request(path, options = {}) {
-    const response = await fetch(path, {
-      credentials: "include",
-      ...options,
-      headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) }
-    });
+    const { timeoutMs = 30000, ...fetchOptions } = options;
+    const requestId = createRequestId();
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "include",
+        ...fetchOptions,
+        signal: fetchOptions.signal || AbortSignal.timeout(timeoutMs),
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(options.headers || {}),
+          "X-Request-ID": requestId
+        }
+      });
+    } catch (error) {
+      if (error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new Error(`PageCrew API request timed out after ${Math.round(timeoutMs / 1000)} seconds. Request ID: ${requestId}`);
+      }
+      throw new Error(`Could not connect to the PageCrew API. Check the Vercel API rewrite and backend availability. Request ID: ${requestId}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw new Error(`The API returned a non-JSON response (HTTP ${response.status}). Check the Vercel /api rewrite. Request ID: ${response.headers.get("x-request-id") || requestId}`);
+    }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+    if (!response.ok) {
+      const requestIdFromServer = response.headers.get("x-request-id") || data.requestId || requestId;
+      const detail = data.error || `Request failed (HTTP ${response.status}).`;
+      throw new Error(`${detail} (HTTP ${response.status}; Request ID: ${requestIdFromServer})`);
+    }
     return data;
   }
 
@@ -254,6 +283,7 @@
     try {
       const result = await request(`/api/campaigns/${encodeURIComponent(campaignId)}/ai/generate`, {
         method: "POST",
+        timeoutMs: 120000,
         body: JSON.stringify({ settings })
       });
       state.content = result.content;

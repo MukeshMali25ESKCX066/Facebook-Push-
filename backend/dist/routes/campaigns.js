@@ -160,7 +160,8 @@ router.post("/ai/health", async (_req, res) => {
         const result = await aiContent.testGeminiConnection();
         res.json(result);
     } catch (error) {
-        const response = aiErrorResponse(error);
+        logAiFailure(_req, "connectivity-test", error);
+        const response = aiErrorResponse(error, _req.requestId);
         res.status(response.status).json({
             ok: false,
             provider: "gemini",
@@ -286,7 +287,7 @@ function recordFailure(campaign, action, error) {
     campaign.aiGenerationLog = campaign.aiGenerationLog.slice(0, 20);
 }
 
-function aiErrorResponse(error) {
+function aiErrorResponse(error, requestId) {
     const status = Number(error.status);
     return {
         status: Number.isInteger(status) && status >= 400 && status < 600 ? status : 502,
@@ -294,9 +295,22 @@ function aiErrorResponse(error) {
             error: String(error.message || "Gemini request failed."),
             provider: "gemini",
             providerStatus: Number(error.providerStatus) || null,
-            providerCode: String(error.providerCode || "").slice(0, 80) || null
+            providerCode: String(error.providerCode || "").slice(0, 80) || null,
+            requestId: requestId || null
         }
     };
+}
+
+function logAiFailure(req, operation, error) {
+    console.error(JSON.stringify({
+        event: "ai_request_failed",
+        requestId: req.requestId || null,
+        operation,
+        provider: "gemini",
+        providerStatus: Number(error.providerStatus) || null,
+        providerCode: String(error.providerCode || "").slice(0, 80) || null,
+        message: String(error.message || "Gemini request failed.").slice(0, 300)
+    }));
 }
 
 function toContentRecord(campaign, page, post, existing) {
@@ -369,7 +383,8 @@ router.post("/:id/ai/generate", async (req, res) => {
     } catch (error) {
         recordFailure(campaign, "content-generation", error);
         if (!persistCampaigns()) console.error("[ai-content] generation error log could not be persisted.");
-        const response = aiErrorResponse(error);
+        logAiFailure(req, "content-generation", error);
+        const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
     }
 });
@@ -442,7 +457,8 @@ router.post("/:id/ai/content/:contentId/regenerate", async (req, res) => {
     } catch (error) {
         recordFailure(campaign, "content-regeneration", error);
         if (!persistCampaigns()) console.error("[ai-content] regeneration error log could not be persisted.");
-        const response = aiErrorResponse(error);
+        logAiFailure(req, "content-regeneration", error);
+        const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
     }
 });
@@ -506,7 +522,8 @@ router.post("/:id/ai/content/:contentId/images", async (req, res) => {
     } catch (error) {
         recordFailure(campaign, "image-generation", error);
         if (!persistCampaigns()) console.error("[ai-content] image-generation error log could not be persisted.");
-        const response = aiErrorResponse(error);
+        logAiFailure(req, "image-generation", error);
+        const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
     }
 });
