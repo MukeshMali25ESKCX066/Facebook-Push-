@@ -222,6 +222,96 @@ test("classifies Gemini HTTP errors and sanitizes provider details", () => {
     assert.match(unavailable.message, /temporary provider error/);
 });
 
+test("classifies the SDK APIConnectionTimeoutError as a 504 without masking other network errors", () => {
+    class APIConnectionTimeoutError extends Error {
+        constructor() {
+            super("Request timed out. This is a client-side timeout.");
+            this.name = "APIConnectionTimeoutError";
+        }
+    }
+
+    const timeout = aiContent.providerError(new APIConnectionTimeoutError(), "secret-key", 78835);
+    assert.equal(timeout.status, 504);
+    assert.equal(timeout.providerStatus, null);
+    assert.equal(timeout.providerTimeout, true);
+    assert.equal(timeout.providerErrorName, "APIConnectionTimeoutError");
+    assert.equal(timeout.providerErrorConstructorName, "APIConnectionTimeoutError");
+    assert.equal(timeout.providerDurationMs, 78835);
+
+    const networkFailure = aiContent.providerError(Object.assign(new TypeError("fetch failed"), {
+        code: "ECONNRESET"
+    }), "secret-key", 142);
+    assert.equal(networkFailure.status, 502);
+    assert.equal(networkFailure.providerStatus, null);
+    assert.equal(networkFailure.providerTimeout, false);
+    assert.equal(networkFailure.providerDurationMs, 142);
+});
+
+test("reads HTTP 429, 503 and invalid-key details from SDK error properties", () => {
+    for (const [status, code, expectedMessage] of [
+        [429, "RESOURCE_EXHAUSTED", /quota or rate limit/i],
+        [503, "UNAVAILABLE", /temporary provider error \(HTTP 503\)/i],
+        [401, "UNAUTHENTICATED", /rejected the backend API key/i]
+    ]) {
+        const cause = Object.assign(new Error(`${status} upstream error`), {
+            name: status === 401 ? "AuthenticationError" : status === 429 ? "RateLimitError" : "InternalServerError",
+            status,
+            statusCode: status,
+            error: { code: status, status: code, message: `Provider failure ${code}.` },
+            body: JSON.stringify({ error: { code: status, status: code, message: `Provider failure ${code}.` } })
+        });
+        const error = aiContent.providerError(cause, "secret-gemini-key", 250);
+        assert.equal(error.status, status);
+        assert.equal(error.providerStatus, status);
+        assert.equal(error.providerCode, code);
+        assert.equal(error.providerTimeout, false);
+        assert.equal(error.providerDurationMs, 250);
+        assert.match(error.message, expectedMessage);
+        assert.doesNotMatch(error.message, /secret-gemini-key/);
+    }
+
+    const sensitiveFailure = aiContent.providerError(Object.assign(new Error("401 UNAUTHENTICATED"), {
+        status: 401,
+        error: {
+            code: 401,
+            status: "UNAUTHENTICATED",
+            message: "Invalid key secret-gemini-key. Authorization: Bearer private-token Cookie: session=private-cookie."
+        }
+    }), "secret-gemini-key", 300);
+    assert.doesNotMatch(sensitiveFailure.providerErrorMessage, /secret-gemini-key|private-token|private-cookie/);
+});
+
+test("annotates malformed Gemini responses with provider duration but no provider HTTP error", async () => {
+    const previousKey = process.env.GEMINI_API_KEY;
+    const previousProvider = process.env.AI_PROVIDER;
+    process.env.GEMINI_API_KEY = "test-only-key";
+    process.env.AI_PROVIDER = "gemini";
+    try {
+        await assert.rejects(
+            aiContent.generateContent(campaign, pages, aiContent.validateSettings({}), async () => Response.json({
+                candidates: [{
+                    content: { role: "model", parts: [{ text: "not valid JSON" }] }
+                }]
+            })),
+            error => {
+                assert.match(error.message, /invalid response/i);
+                assert.equal(error.providerStatus, null);
+                assert.equal(error.providerCode, null);
+                assert.equal(error.providerTimeout, false);
+                assert.equal(error.providerErrorName, "Error");
+                assert.equal(error.providerErrorConstructorName, "Error");
+                assert.ok(Number.isFinite(error.providerDurationMs));
+                return true;
+            }
+        );
+    } finally {
+        if (previousKey == null) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = previousKey;
+        if (previousProvider == null) delete process.env.AI_PROVIDER;
+        else process.env.AI_PROVIDER = previousProvider;
+    }
+});
+
 test("connectivity test uses the configured Gemini model and never returns the API key", async () => {
     const previousKey = process.env.GEMINI_API_KEY;
     const previousProvider = process.env.AI_PROVIDER;

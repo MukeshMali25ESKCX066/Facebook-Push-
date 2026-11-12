@@ -150,20 +150,52 @@ function getActiveTextProvider() {
     };
 }
 
-function getProviderErrorDetails(cause, apiKey) {
+function sanitizeProviderText(value, apiKey) {
+    let text = String(value || "");
+    if (apiKey) text = text.replaceAll(apiKey, "[redacted]");
+    return text
+        .replace(/([?&]key=)[^&\s"'`]+/gi, "$1[redacted]")
+        .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
+        .replace(/\bAIza[\w-]{20,}\b/g, "[redacted]")
+        .replace(/\b(cookie|set-cookie)\s*[:=]\s*[^,\r\n]*/gi, "$1=[redacted]")
+        .replace(/(?:api[_ -]?key|authorization|access[_ -]?token)(["']?\s*[:=]\s*["']?)[^\s,}"']+/gi, "$1[redacted]")
+        .replace(/[\r\n\t]+/g, " ")
+        .trim()
+        .slice(0, 300);
+}
+
+function isProviderTimeout(cause) {
+    let current = cause;
+    for (let depth = 0; current && depth < 3; depth++, current = current.cause) {
+        const names = [current.name, current.constructor?.name];
+        if (names.some(name => name === "APIConnectionTimeoutError" || name === "RequestTimeoutError" || name === "TimeoutError")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function getProviderErrorDetails(cause, apiKey, elapsedMs = null) {
     const rawMessage = String(cause?.message || "");
     let responseBody;
-    try {
-        responseBody = JSON.parse(rawMessage);
-    } catch {
-        responseBody = null;
+    for (const candidate of [cause?.body, rawMessage]) {
+        if (typeof candidate !== "string") continue;
+        try {
+            responseBody = JSON.parse(candidate);
+            break;
+        } catch {
+            responseBody = null;
+        }
     }
 
-    const providerError = responseBody?.error;
+    const providerError = cause?.error?.error || cause?.error || responseBody?.error;
     const status = Number(cause?.status || cause?.statusCode || cause?.response?.status || providerError?.code || 0);
-    const code = String(providerError?.status || providerError?.reason || "").slice(0, 80);
+    const code = sanitizeProviderText(providerError?.status || providerError?.reason || "", apiKey).slice(0, 80);
     let providerMessage = String(providerError?.message || rawMessage);
-    if (providerMessage === rawMessage && cause?.name === "ApiError" && status) {
+    if (providerMessage === rawMessage && status && responseBody?.error?.message) {
+        providerMessage = String(responseBody.error.message);
+    }
+    if (providerMessage === rawMessage && status && (cause?.name === "APIError" || cause?.name === "ApiError")) {
         providerMessage = "";
     }
     providerMessage = providerMessage
@@ -175,16 +207,43 @@ function getProviderErrorDetails(cause, apiKey) {
         .replace(/[\r\n\t]+/g, " ")
         .trim()
         .slice(0, 300);
-    return { status, code, message: providerMessage };
+    providerMessage = sanitizeProviderText(providerMessage, apiKey);
+    const errorName = sanitizeProviderText(cause?.name || "Error", apiKey).slice(0, 80) || "Error";
+    const errorConstructorName = sanitizeProviderText(cause?.constructor?.name || errorName, apiKey).slice(0, 80) || "Error";
+    const durationMs = Number.isFinite(elapsedMs) ? Math.max(0, Math.round(elapsedMs)) : null;
+    return {
+        status,
+        code,
+        message: providerMessage,
+        errorName,
+        errorConstructorName,
+        timeout: isProviderTimeout(cause),
+        durationMs
+    };
 }
 
-function providerError(cause, apiKey) {
-    const details = getProviderErrorDetails(cause, apiKey);
-    const { status, code } = details;
+function attachProviderDiagnostics(error, details) {
+    error.providerStatus = details.status || null;
+    error.providerCode = details.code || null;
+    error.providerMessage = details.message || null;
+    error.providerErrorName = details.errorName;
+    error.providerErrorConstructorName = details.errorConstructorName;
+    error.providerErrorMessage = details.message || "";
+    error.providerTimeout = details.timeout;
+    error.providerDurationMs = details.durationMs;
+    return error;
+}
+
+function providerError(cause, apiKey, elapsedMs = null) {
+    const details = getProviderErrorDetails(cause, apiKey, elapsedMs);
+    const { status } = details;
     let message;
     let responseStatus = status || 502;
 
-    if (status === 400) {
+    if (details.timeout && !status) {
+        message = "Gemini connection timed out before a response was received. Please try again.";
+        responseStatus = 504;
+    } else if (status === 400) {
         message = `Gemini rejected the request (HTTP 400). Review the request parameters${details.message ? `: ${details.message}` : "."}`;
     } else if (status === 401) {
         message = `Gemini rejected the backend API key (HTTP 401). Verify GEMINI_API_KEY.${details.message ? ` ${details.message}` : ""}`;
@@ -197,9 +256,6 @@ function providerError(cause, apiKey) {
         message = `Gemini quota or rate limit exceeded (HTTP 429). Check the Google AI project quota.${details.message ? ` ${details.message}` : ""}`;
     } else if (status === 500 || status === 503 || status >= 500) {
         message = `Gemini returned a temporary provider error (HTTP ${status}). Try again later.${details.message ? ` ${details.message}` : ""}`;
-    } else if (cause?.name === "TimeoutError" || cause?.name === "AbortError" || status === 408) {
-        message = "Gemini request timed out before a response was received. Please try again.";
-        responseStatus = 504;
     } else if (status > 0) {
         message = `Gemini API returned HTTP ${status}.${details.message ? ` ${details.message}` : " Check the request and backend configuration."}`;
     } else {
@@ -209,10 +265,7 @@ function providerError(cause, apiKey) {
 
     const error = new Error(message);
     error.status = responseStatus;
-    error.providerStatus = status || null;
-    error.providerCode = code || null;
-    error.providerMessage = details.message || null;
-    return error;
+    return attachProviderDiagnostics(error, details);
 }
 
 async function testGeminiConnection(fetchImpl = fetch) {
@@ -239,9 +292,15 @@ async function testGeminiConnection(fetchImpl = fetch) {
         if (typeof response.text !== "string" || !response.text.trim()) {
             const error = new Error("Gemini accepted the connectivity request but returned no text.");
             error.status = 502;
-            error.providerStatus = null;
-            error.providerCode = "EMPTY_RESPONSE";
-            throw error;
+            throw attachProviderDiagnostics(error, {
+                status: 0,
+                code: "EMPTY_RESPONSE",
+                message: error.message,
+                errorName: error.name,
+                errorConstructorName: error.constructor.name,
+                timeout: false,
+                durationMs: Date.now() - startedAt
+            });
         }
         return {
             ok: true,
@@ -252,7 +311,7 @@ async function testGeminiConnection(fetchImpl = fetch) {
         };
     } catch (cause) {
         if (cause?.providerCode === "EMPTY_RESPONSE") throw cause;
-        throw providerError(cause, provider.apiKey);
+        throw providerError(cause, provider.apiKey, Date.now() - startedAt);
     }
 }
 
@@ -265,6 +324,7 @@ async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
     }
 
     let response;
+    const startedAt = Date.now();
     try {
         const client = new GoogleGenAI({
             apiKey: provider.apiKey,
@@ -282,20 +342,26 @@ async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
             }
         });
     } catch (cause) {
-        throw providerError(cause, provider.apiKey);
+        throw providerError(cause, provider.apiKey, Date.now() - startedAt);
     }
 
-    const content = response.text;
-    if (typeof content !== "string") throw new Error("The AI provider returned an empty response. Please try again.");
-    return {
-        posts: parseContentResponse(content, pages, settings),
-        usage: {
-            provider: provider.provider,
-            model: response.modelVersion || provider.model,
-            inputTokens: Number(response.usageMetadata?.promptTokenCount || 0),
-            outputTokens: Number(response.usageMetadata?.candidatesTokenCount || 0)
-        }
-    };
+    const providerDurationMs = Date.now() - startedAt;
+    try {
+        const content = response.text;
+        if (typeof content !== "string") throw new Error("The AI provider returned an empty response. Please try again.");
+        return {
+            posts: parseContentResponse(content, pages, settings),
+            usage: {
+                provider: provider.provider,
+                model: response.modelVersion || provider.model,
+                inputTokens: Number(response.usageMetadata?.promptTokenCount || 0),
+                outputTokens: Number(response.usageMetadata?.candidatesTokenCount || 0)
+            }
+        };
+    } catch (cause) {
+        const error = cause instanceof Error ? cause : new Error("Gemini returned an invalid response.");
+        throw attachProviderDiagnostics(error, getProviderErrorDetails(error, provider.apiKey, providerDurationMs));
+    }
 }
 
 function buildImagePrompt(campaign, content, style, variationCount, variationIndex) {
@@ -322,6 +388,7 @@ async function generateImages(campaign, content, style, count, fetchImpl = fetch
 
     const model = String(process.env.GEMINI_IMAGE_MODEL || "").trim() || "gemini-nano-banana-2.1";
     let interactions;
+    const startedAt = Date.now();
     try {
         const client = new GoogleGenAI({
             apiKey,
@@ -334,14 +401,23 @@ async function generateImages(campaign, content, style, count, fetchImpl = fetch
             })
         ));
     } catch (cause) {
-        throw providerError(cause, apiKey);
+        throw providerError(cause, apiKey, Date.now() - startedAt);
     }
 
+    const providerDurationMs = Date.now() - startedAt;
     const images = interactions.map(interaction => interaction.output_image?.data);
     if (images.length !== count || images.some(image => typeof image !== "string" || !image)) {
         const error = new Error("Gemini returned an incomplete image result. Please try again.");
         error.status = 502;
-        throw error;
+        throw attachProviderDiagnostics(error, {
+            status: 0,
+            code: "INCOMPLETE_RESPONSE",
+            message: error.message,
+            errorName: error.name,
+            errorConstructorName: error.constructor.name,
+            timeout: false,
+            durationMs: providerDurationMs
+        });
     }
 
     return images.map(image => Buffer.from(image, "base64"));

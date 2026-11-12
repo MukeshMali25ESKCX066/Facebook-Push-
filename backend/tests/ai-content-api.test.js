@@ -42,7 +42,7 @@ test("page-wise generation API calls Gemini through the official SDK without an 
             return Response.json({
                 error: {
                     code: simulatedProviderErrorStatus,
-                    status: "UNAVAILABLE",
+                    status: simulatedProviderErrorStatus === 401 ? "UNAUTHENTICATED" : "UNAVAILABLE",
                     message: "Simulated upstream outage."
                 }
             }, { status: simulatedProviderErrorStatus });
@@ -69,6 +69,10 @@ test("page-wise generation API calls Gemini through the official SDK without an 
 
     const app = express();
     app.use(express.json());
+    app.use((req, _res, next) => {
+        req.requestId = req.get("x-request-id");
+        next();
+    });
     app.use("/api/campaigns", campaignsRoute);
     const server = app.listen(0, "127.0.0.1");
     t.after(async () => {
@@ -134,6 +138,38 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     assert.equal(health.model, "gemini-3.6-flash");
     assert.equal(health.keyLoaded, true);
     assert.equal(JSON.stringify(health).includes("test-api-route-gemini-key"), false);
+
+    simulatedProviderErrorStatus = 401;
+    const requestId = "638ad8e4-c023-4539-8f8d-acd1f0a96e21";
+    const diagnosticLogs = [];
+    const originalConsoleError = console.error;
+    console.error = message => diagnosticLogs.push(String(message));
+    let failedAuthResponse;
+    try {
+        failedAuthResponse = await fetch(`${baseUrl}/ai/health`, {
+            method: "POST",
+            headers: { "x-request-id": requestId }
+        });
+    } finally {
+        console.error = originalConsoleError;
+    }
+    assert.equal(failedAuthResponse.status, 401);
+    const diagnostic = diagnosticLogs.map(line => {
+        try {
+            return JSON.parse(line);
+        } catch {
+            return null;
+        }
+    }).find(item => item?.event === "ai_request_failed");
+    assert.ok(diagnostic);
+    assert.equal(diagnostic.requestId, requestId);
+    assert.equal(diagnostic.providerStatus, 401);
+    assert.equal(diagnostic.providerCode, "UNAUTHENTICATED");
+    assert.equal(diagnostic.timeout, false);
+    assert.equal(diagnostic.errorName, "ApiError");
+    assert.equal(diagnostic.errorConstructorName, "ApiError");
+    assert.ok(Number.isFinite(diagnostic.durationMs));
+    assert.doesNotMatch(JSON.stringify(diagnostic), /test-api-route-gemini-key/);
 
     simulatedProviderErrorStatus = 503;
     const failedHealthResponse = await fetch(`${baseUrl}/ai/health`, { method: "POST" });

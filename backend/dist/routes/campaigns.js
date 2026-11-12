@@ -267,7 +267,7 @@ function configuredRate(name) {
     return Number.isFinite(rate) && rate >= 0 ? rate : null;
 }
 
-function recordFailure(campaign, action, error) {
+function recordFailure(campaign, action, error, requestId) {
     const isImageGeneration = action === "image-generation";
     const provider = String(process.env.AI_PROVIDER || "gemini").toLowerCase();
     campaign.aiGenerationLog = Array.isArray(campaign.aiGenerationLog) ? campaign.aiGenerationLog : [];
@@ -279,9 +279,14 @@ function recordFailure(campaign, action, error) {
             ? process.env.GEMINI_IMAGE_MODEL || "gemini-nano-banana-2.1"
             : process.env.GEMINI_MODEL || "gemini-3.6-flash",
         promptVersion: "pagecrew-social-v1",
+        requestId: requestId || null,
         error: String(error.message || "AI request failed.").slice(0, 240),
+        errorName: String(error.providerErrorName || error.name || "Error").slice(0, 80),
+        errorConstructorName: String(error.providerErrorConstructorName || error.constructor?.name || "Error").slice(0, 80),
         providerStatus: Number(error.providerStatus) || null,
         providerCode: String(error.providerCode || "").slice(0, 80) || null,
+        providerTimeout: error.providerTimeout === true,
+        providerDurationMs: Number.isFinite(error.providerDurationMs) ? error.providerDurationMs : null,
         createdAt: new Date().toISOString()
     });
     campaign.aiGenerationLog = campaign.aiGenerationLog.slice(0, 20);
@@ -307,8 +312,13 @@ function logAiFailure(req, operation, error) {
         requestId: req.requestId || null,
         operation,
         provider: "gemini",
+        errorName: String(error.providerErrorName || error.name || "Error").slice(0, 80),
+        errorConstructorName: String(error.providerErrorConstructorName || error.constructor?.name || "Error").slice(0, 80),
         providerStatus: Number(error.providerStatus) || null,
         providerCode: String(error.providerCode || "").slice(0, 80) || null,
+        timeout: error.providerTimeout === true,
+        durationMs: Number.isFinite(error.providerDurationMs) ? error.providerDurationMs : null,
+        errorMessage: String(error.providerErrorMessage || error.message || "Gemini request failed.").slice(0, 300),
         message: String(error.message || "Gemini request failed.").slice(0, 300)
     }));
 }
@@ -381,8 +391,8 @@ router.post("/:id/ai/generate", async (req, res) => {
         if (!persistCampaignOrRespond(res)) return;
         res.json({ content, settings, usage: campaign.aiGenerationLog[0] });
     } catch (error) {
-        recordFailure(campaign, "content-generation", error);
-        if (!persistCampaigns()) console.error("[ai-content] generation error log could not be persisted.");
+        recordFailure(campaign, "content-generation", error, req.requestId);
+        if (!persistCampaigns()) console.error(JSON.stringify({ event: "ai_failure_log_persistence_failed", requestId: req.requestId || null, operation: "content-generation" }));
         logAiFailure(req, "content-generation", error);
         const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
@@ -455,8 +465,8 @@ router.post("/:id/ai/content/:contentId/regenerate", async (req, res) => {
         if (!persistCampaignOrRespond(res)) return;
         res.json(content);
     } catch (error) {
-        recordFailure(campaign, "content-regeneration", error);
-        if (!persistCampaigns()) console.error("[ai-content] regeneration error log could not be persisted.");
+        recordFailure(campaign, "content-regeneration", error, req.requestId);
+        if (!persistCampaigns()) console.error(JSON.stringify({ event: "ai_failure_log_persistence_failed", requestId: req.requestId || null, operation: "content-regeneration" }));
         logAiFailure(req, "content-regeneration", error);
         const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
@@ -520,8 +530,8 @@ router.post("/:id/ai/content/:contentId/images", async (req, res) => {
             }))
         });
     } catch (error) {
-        recordFailure(campaign, "image-generation", error);
-        if (!persistCampaigns()) console.error("[ai-content] image-generation error log could not be persisted.");
+        recordFailure(campaign, "image-generation", error, req.requestId);
+        if (!persistCampaigns()) console.error(JSON.stringify({ event: "ai_failure_log_persistence_failed", requestId: req.requestId || null, operation: "image-generation" }));
         logAiFailure(req, "image-generation", error);
         const response = aiErrorResponse(error, req.requestId);
         res.status(response.status).json(response.body);
