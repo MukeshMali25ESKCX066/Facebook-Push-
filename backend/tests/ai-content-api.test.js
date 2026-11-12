@@ -138,8 +138,7 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     const requestId = "ad5f6e5c-ecce-44c0-8247-b56f64355732";
     const malformedGeminiText = '{"apiKey":"test-api-route-gemini-key","campaign":"PRIVATE_CAMPAIGN_TEXT", invalid}';
     simulatedResponseText = malformedGeminiText;
-    simulatedResponseText = malformedGeminiText;
-    simulatedFinishReason = "MAX_TOKENS";
+    simulatedFinishReason = "STOP";
     simulatedBlockReason = "SAFETY";
     const diagnosticLogs = [];
     const originalParseConsoleError = console.error;
@@ -172,7 +171,7 @@ test("page-wise generation API calls Gemini through the official SDK without an 
     assert.deepEqual(parseDiagnostic.responseDiagnostics, {
         model: "gemini-3.6-flash",
         candidateCount: 1,
-        candidateFinishReason: "MAX_TOKENS",
+        candidateFinishReason: "STOP",
         blockReason: "SAFETY",
         safetyBlockReasons: ["HARM_CATEGORY_DANGEROUS_CONTENT"],
         responseTextLength: malformedGeminiText.length,

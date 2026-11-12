@@ -60,6 +60,21 @@ test("normalizes hashtags and returns one post in the selected Page order", () =
     assert.deepEqual(posts[1].hashtags, ["#Thanksgiving", "#USA"]);
 });
 
+test("parses a complete JSON markdown fence without relaxing JSON validation", () => {
+    const fenced = "```json\n" + JSON.stringify({
+        posts: [
+            { pageId: "page-a", caption: "A distinct first caption.", cta: "Read more", hashtags: [] },
+            { pageId: "page-b", caption: "A distinct second caption.", cta: "Explore more", hashtags: [] }
+        ]
+    }) + "\n```";
+    assert.equal(aiContent.parseContentResponse(fenced, pages, aiContent.validateSettings({})).length, 2);
+    assert.throws(() => aiContent.parseContentResponse(
+        "```json\n{\"posts\": []}\n``` extra",
+        pages,
+        aiContent.validateSettings({})
+    ), /invalid response/);
+});
+
 test("rejects missing and duplicate page captions", () => {
     assert.throws(() => aiContent.parseContentResponse(JSON.stringify({
         posts: [{ pageId: "page-a", caption: "Only one page", cta: "", hashtags: [] }]
@@ -106,6 +121,7 @@ test("calls the official Gemini SDK server-side and records token usage", async 
         assert.equal(new Headers(requestOptions.options.headers).get("x-goog-api-key"), "test-only-key");
         const body = JSON.parse(requestOptions.options.body);
         assert.equal(body.generationConfig.responseMimeType, "application/json");
+        assert.equal(body.generationConfig.maxOutputTokens, 4096);
         assert.match(body.systemInstruction.parts[0].text, /distinctive Facebook posts/);
         assert.equal(result.usage.inputTokens, 120);
         assert.equal(result.usage.outputTokens, 80);
@@ -119,6 +135,108 @@ test("calls the official Gemini SDK server-side and records token usage", async 
         else process.env.AI_PROVIDER = previousProvider;
         if (previousModel == null) delete process.env.GEMINI_MODEL;
         else process.env.GEMINI_MODEL = previousModel;
+    }
+});
+
+test("retries MAX_TOKENS with larger limits and generates large Page selections in batches", async () => {
+    const previousKey = process.env.GEMINI_API_KEY;
+    const previousProvider = process.env.AI_PROVIDER;
+    process.env.GEMINI_API_KEY = "test-only-key";
+    process.env.AI_PROVIDER = "gemini";
+    const manyPages = Array.from({ length: 7 }, (_, index) => ({
+        id: `page-${index + 1}`,
+        name: `Page ${index + 1}`
+    }));
+    const requests = [];
+    try {
+        const result = await aiContent.generateContent(campaign, manyPages, aiContent.validateSettings({}), async (_url, options) => {
+            const body = JSON.parse(options.body);
+            const requestedPages = JSON.parse(body.contents[0].parts[0].text).pages;
+            requests.push({ pageIds: requestedPages.map(page => page.pageId), maxOutputTokens: body.generationConfig.maxOutputTokens });
+            if (requests.length === 1) {
+                return Response.json({
+                    candidates: [{
+                        content: { role: "model", parts: [{ text: '{"posts":[' }] },
+                        finishReason: "MAX_TOKENS"
+                    }]
+                });
+            }
+            return Response.json({
+                modelVersion: "gemini-3.6-flash",
+                candidates: [{
+                    content: {
+                        role: "model",
+                        parts: [{
+                            text: JSON.stringify({
+                                posts: requestedPages.map(page => ({
+                                    pageId: page.pageId,
+                                    caption: `A unique story for ${page.pageName}.`,
+                                    cta: "Read more",
+                                    hashtags: []
+                                }))
+                            })
+                        }]
+                    },
+                    finishReason: "STOP"
+                }],
+                usageMetadata: { promptTokenCount: 10, candidatesTokenCount: requestedPages.length * 20 }
+            });
+        });
+
+        assert.deepEqual(requests.map(request => request.maxOutputTokens), [4096, 8192, 4096]);
+        assert.deepEqual(requests.map(request => request.pageIds.length), [6, 6, 1]);
+        assert.deepEqual(result.posts.map(post => post.pageId), manyPages.map(page => page.id));
+        assert.equal(result.usage.inputTokens, 20);
+        assert.equal(result.usage.outputTokens, 140);
+    } finally {
+        if (previousKey == null) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = previousKey;
+        if (previousProvider == null) delete process.env.AI_PROVIDER;
+        else process.env.AI_PROVIDER = previousProvider;
+    }
+});
+
+test("stops after the final MAX_TOKENS retry and preserves only safe response diagnostics", async () => {
+    const previousKey = process.env.GEMINI_API_KEY;
+    const previousProvider = process.env.AI_PROVIDER;
+    process.env.GEMINI_API_KEY = "test-only-key";
+    process.env.AI_PROVIDER = "gemini";
+    const limits = [];
+    const privateText = '{"campaign":"PRIVATE_GENERATED_CONTENT","apiKey":"test-only-key"';
+    try {
+        await assert.rejects(
+            aiContent.generateContent(campaign, pages, aiContent.validateSettings({}), async (_url, options) => {
+                const body = JSON.parse(options.body);
+                limits.push(body.generationConfig.maxOutputTokens);
+                return Response.json({
+                    candidates: [{
+                        content: { role: "model", parts: [{ text: privateText }] },
+                        finishReason: "MAX_TOKENS"
+                    }]
+                });
+            }),
+            error => {
+                assert.equal(error.name, "GeminiTruncatedResponseError");
+                assert.equal(error.status, 502);
+                assert.deepEqual(error.responseDiagnostics, {
+                    model: "gemini-3.6-flash",
+                    candidateCount: 1,
+                    candidateFinishReason: "MAX_TOKENS",
+                    blockReason: null,
+                    safetyBlockReasons: [],
+                    responseTextLength: privateText.length,
+                    jsonParsingSucceeded: false
+                });
+                assert.doesNotMatch(JSON.stringify(error.responseDiagnostics), /PRIVATE_GENERATED_CONTENT|test-only-key/);
+                return true;
+            }
+        );
+        assert.deepEqual(limits, [4096, 8192, 12000]);
+    } finally {
+        if (previousKey == null) delete process.env.GEMINI_API_KEY;
+        else process.env.GEMINI_API_KEY = previousKey;
+        if (previousProvider == null) delete process.env.AI_PROVIDER;
+        else process.env.AI_PROVIDER = previousProvider;
     }
 });
 
@@ -292,7 +410,7 @@ test("preserves parser failures and records only safe Gemini response metadata",
             aiContent.generateContent(campaign, pages, aiContent.validateSettings({}), async () => Response.json({
                 candidates: [{
                     content: { role: "model", parts: [{ text: responseText }] },
-                    finishReason: "MAX_TOKENS",
+                    finishReason: "STOP",
                     safetyRatings: [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", blocked: true }]
                 }]
             })),
@@ -310,7 +428,7 @@ test("preserves parser failures and records only safe Gemini response metadata",
                 assert.deepEqual(error.responseDiagnostics, {
                     model: "gemini-3.6-flash",
                     candidateCount: 1,
-                    candidateFinishReason: "MAX_TOKENS",
+                    candidateFinishReason: "STOP",
                     blockReason: null,
                     safetyBlockReasons: ["HARM_CATEGORY_DANGEROUS_CONTENT"],
                     responseTextLength: responseText.length,

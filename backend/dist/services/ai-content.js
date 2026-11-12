@@ -116,10 +116,16 @@ function parserDiagnosticMessage(error) {
     return `JSON parsing failed at position ${position[1]}${lineColumn}.`;
 }
 
+function stripJsonFence(content) {
+    const trimmed = content.trim();
+    const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    return match ? match[1].trim() : trimmed;
+}
+
 function parseContentResponse(content, pages, settings, responseDiagnostics = null) {
     let parsed;
     try {
-        parsed = JSON.parse(content);
+        parsed = JSON.parse(stripJsonFence(content));
     } catch (cause) {
         const error = new Error("The AI provider returned an invalid response. Please try again.", { cause });
         error.parserErrorName = String(cause?.name || "SyntaxError").slice(0, 80);
@@ -361,50 +367,119 @@ async function generateContent(campaign, pages, settings, fetchImpl = fetch) {
         throw error;
     }
 
-    let response;
-    const startedAt = Date.now();
-    try {
-        const client = new GoogleGenAI({
-            apiKey: provider.apiKey,
-            httpOptions: { timeout: 90_000, fetch: fetchImpl }
-        });
-        const prompt = buildContentPrompt(campaign, pages, settings);
-        response = await client.models.generateContent({
-            model: provider.model,
-            contents: prompt[1].content,
-            config: {
-                systemInstruction: prompt[0].content,
-                temperature: 0.85,
-                maxOutputTokens: Math.min(12000, pages.length * 350),
-                responseMimeType: "application/json"
-            }
-        });
-    } catch (cause) {
-        throw providerError(cause, provider.apiKey, Date.now() - startedAt);
+    const client = new GoogleGenAI({
+        apiKey: provider.apiKey,
+        httpOptions: { timeout: 90_000, fetch: fetchImpl }
+    });
+    const batches = [];
+    for (let index = 0; index < pages.length; index += 6) {
+        batches.push(pages.slice(index, index + 6));
     }
 
-    const providerDurationMs = Date.now() - startedAt;
-    try {
-        const content = response.text;
-        if (typeof content !== "string") throw new Error("The AI provider returned an empty response. Please try again.");
-        const responseDiagnostics = getResponseDiagnostics(response, provider.model, content);
-        return {
-            posts: parseContentResponse(content, pages, settings, responseDiagnostics),
-            usage: {
-                provider: provider.provider,
-                model: response.modelVersion || provider.model,
-                inputTokens: Number(response.usageMetadata?.promptTokenCount || 0),
-                outputTokens: Number(response.usageMetadata?.candidatesTokenCount || 0)
+    const posts = [];
+    const seenCaptions = new Set();
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let model = provider.model;
+
+    for (const batch of batches) {
+        const prompt = buildContentPrompt(campaign, batch, settings);
+        let response;
+        let responseDiagnostics;
+        const tokenLimits = [4096, 8192, 12000];
+        let batchDurationMs = 0;
+
+        for (let attempt = 0; attempt < tokenLimits.length; attempt++) {
+            const startedAt = Date.now();
+            try {
+                response = await client.models.generateContent({
+                    model: provider.model,
+                    contents: prompt[1].content,
+                    config: {
+                        systemInstruction: prompt[0].content,
+                        temperature: 0.85,
+                        maxOutputTokens: tokenLimits[attempt],
+                        responseMimeType: "application/json"
+                    }
+                });
+            } catch (cause) {
+                throw providerError(cause, provider.apiKey, Date.now() - startedAt);
             }
-        };
-    } catch (cause) {
-        const error = cause instanceof Error ? cause : new Error("Gemini returned an invalid response.");
-        attachProviderDiagnostics(error, getProviderErrorDetails(error, provider.apiKey, providerDurationMs));
-        if (cause?.responseDiagnostics) error.responseDiagnostics = cause.responseDiagnostics;
-        if (cause?.parserErrorName) error.parserErrorName = cause.parserErrorName;
-        if (cause?.parserErrorMessage) error.parserErrorMessage = cause.parserErrorMessage;
-        throw error;
+
+            batchDurationMs = Date.now() - startedAt;
+            const content = response.text;
+            responseDiagnostics = typeof content === "string"
+                ? getResponseDiagnostics(response, provider.model, content)
+                : {
+                    ...getResponseDiagnostics(response, provider.model, ""),
+                    candidateFinishReason: safeResponseLabel(response.candidates?.[0]?.finishReason, 80)
+                };
+            if (responseDiagnostics.candidateFinishReason !== "MAX_TOKENS") break;
+
+            if (attempt === tokenLimits.length - 1) {
+                const error = new Error("Gemini reached the output token limit. Reduce the number of requested Pages or try again.");
+                error.name = "GeminiTruncatedResponseError";
+                error.status = 502;
+                attachProviderDiagnostics(error, {
+                    status: 0,
+                    code: "MAX_TOKENS",
+                    message: "Gemini response was truncated at the configured output token limit.",
+                    errorName: error.name,
+                    errorConstructorName: error.name,
+                    timeout: false,
+                    durationMs: batchDurationMs
+                });
+                error.responseDiagnostics = responseDiagnostics;
+                throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+
+        const content = response.text;
+        if (typeof content !== "string") {
+            const error = new Error("The AI provider returned an empty response. Please try again.");
+            attachProviderDiagnostics(error, {
+                ...getProviderErrorDetails(error, provider.apiKey, batchDurationMs),
+                durationMs: batchDurationMs
+            });
+            error.responseDiagnostics = responseDiagnostics;
+            throw error;
+        }
+
+        let batchPosts;
+        try {
+            batchPosts = parseContentResponse(content, batch, settings, responseDiagnostics);
+        } catch (cause) {
+            const error = cause instanceof Error ? cause : new Error("Gemini returned an invalid response.");
+            attachProviderDiagnostics(error, getProviderErrorDetails(error, provider.apiKey, batchDurationMs));
+            if (cause?.responseDiagnostics) error.responseDiagnostics = cause.responseDiagnostics;
+            if (cause?.parserErrorName) error.parserErrorName = cause.parserErrorName;
+            if (cause?.parserErrorMessage) error.parserErrorMessage = cause.parserErrorMessage;
+            throw error;
+        }
+
+        for (const post of batchPosts) {
+            const normalized = post.caption.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+            if (seenCaptions.has(normalized)) {
+                throw new Error("The AI returned duplicate captions. Please regenerate the content.");
+            }
+            seenCaptions.add(normalized);
+            posts.push(post);
+        }
+        inputTokens += Number(response.usageMetadata?.promptTokenCount || 0);
+        outputTokens += Number(response.usageMetadata?.candidatesTokenCount || 0);
+        model = response.modelVersion || model;
     }
+
+    return {
+        posts,
+        usage: {
+            provider: provider.provider,
+            model,
+            inputTokens,
+            outputTokens
+        }
+    };
 }
 
 function buildImagePrompt(campaign, content, style, variationCount, variationIndex) {
