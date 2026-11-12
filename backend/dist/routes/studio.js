@@ -1,4 +1,5 @@
 "use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 
 const { randomUUID } = require("node:crypto");
 const { mkdir, unlink, writeFile } = require("node:fs/promises");
