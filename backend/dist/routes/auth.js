@@ -676,7 +676,7 @@ router.get("/facebook", async (req, res) => {
     if (!appId || appId === "YOUR_META_APP_ID") {
         return res.status(500).json({ error: "Facebook app is not configured. Set META_APP_ID and valid redirect URI." });
     }
-    const scope = encodeURIComponent(process.env.META_SCOPE || "public_profile,pages_show_list");
+    const scope = encodeURIComponent(process.env.META_SCOPE || "public_profile,pages_show_list,pages_manage_posts,pages_read_engagement");
     const oauthState = (0, node_crypto_1.randomUUID)();
     pendingOAuthStates.set(oauthState, { createdAt: Date.now(), workspaceScopeId });
     const url = `https://www.facebook.com/v23.0/dialog/oauth?client_id=${appId}&redirect_uri=${redirect}&scope=${scope}&auth_type=rerequest&state=${oauthState}`;

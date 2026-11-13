@@ -3,13 +3,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const { randomUUID } = require("node:crypto");
 const { URL } = require("node:url");
-const dns = require("node:dns").promises;
 const path = require("node:path");
 const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 const express = require("express");
 const auth_js_1 = require("./auth.js");
 const aiContent = require("../services/ai-content.js");
 const { generatedImageDirectory } = require("../services/generated-image-store.js");
+const { assertPublicUrl, fetchPublicResource, parseHttpUrl } = require("../services/public-url.js");
+const { discoverArticleUrls } = require("../services/article-discovery.js");
 
 const router = (0, express_1.Router)();
 const campaigns = [];
@@ -44,55 +45,6 @@ function absoluteUrl(value, baseUrl) {
     }
 }
 
-function isPrivateAddress(address) {
-    const normalized = address.toLowerCase();
-    if (normalized === "::" || normalized === "::1" || /^fe[89ab]/.test(normalized) || normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
-    if (normalized.startsWith("::ffff:")) {
-        const mapped = normalized.slice(7);
-        if (mapped.includes(".")) return isPrivateAddress(mapped);
-        const words = mapped.split(":").map(word => parseInt(word || "0", 16));
-        if (words.length <= 2 && words.every(Number.isFinite)) {
-            const high = words[0] || 0;
-            const low = words[1] || 0;
-            return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
-        }
-    }
-    const parts = normalized.split(".").map(Number);
-    if (parts.length !== 4 || parts.some(part => Number.isNaN(part))) return false;
-    return parts[0] === 10 ||
-        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-        (parts[0] === 192 && parts[1] === 168) ||
-        (parts[0] === 127) ||
-        (parts[0] === 169 && parts[1] === 254) ||
-        parts[0] === 0;
-}
-
-async function assertPublicUrl(value) {
-    const url = parseHttpUrl(value);
-    if (isPrivateAddress(url.hostname)) throw new Error("Local and private article URLs are not supported.");
-    const addresses = await dns.lookup(url.hostname, { all: true });
-    if (!addresses.length || addresses.some(address => isPrivateAddress(address.address))) {
-        throw new Error("Local and private article URLs are not supported.");
-    }
-    return url;
-}
-
-function parseHttpUrl(value) {
-    let url;
-    try {
-        url = new URL(value);
-    } catch {
-        throw new Error("Enter a valid HTTP or HTTPS article URL.");
-    }
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error("Enter a valid HTTP or HTTPS article URL.");
-    if (!url.hostname || url.username || url.password) throw new Error("Enter a valid public article URL.");
-    const hostname = url.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
-        throw new Error("Local and private article URLs are not supported.");
-    }
-    return url;
-}
-
 router.post("/preview", async (req, res) => {
     let articleUrl;
     try {
@@ -103,31 +55,17 @@ router.post("/preview", async (req, res) => {
     }
 
     try {
-        let currentUrl = articleUrl;
-        let response;
-        for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
-            currentUrl = await assertPublicUrl(currentUrl.toString());
-            response = await fetch(currentUrl.toString(), {
-                redirect: "manual",
-                signal: AbortSignal.timeout(15000),
-                headers: { Accept: "text/html,application/xhtml+xml" }
-            });
-            if (response.status < 300 || response.status >= 400) break;
-            const location = response.headers.get("location");
-            if (!location || redirectCount === 5) throw new Error("Article has too many or invalid redirects.");
-            currentUrl = new URL(location, currentUrl);
-        }
-        if (!response.ok) throw new Error(`Article returned HTTP ${response.status}.`);
-        const contentType = response.headers.get("content-type") || "";
-        if (!contentType.includes("text/html")) throw new Error("The URL does not return an HTML article.");
-        const html = await response.text();
+        const { text: html, url: currentUrl } = await fetchPublicResource(articleUrl.toString(), {
+            allowedTypes: ["text/html", "application/xhtml+xml"],
+            timeoutMs: 15000
+        });
         const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i)
             || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i);
         const canonical = firstMeta(html, ["og:url"]) || canonicalMatch?.[1] || currentUrl.toString();
         const title = firstMeta(html, ["og:title", "twitter:title"]) || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
         const description = firstMeta(html, ["og:description", "twitter:description", "description"]) || "";
         const image = firstMeta(html, ["og:image", "twitter:image"]) || "";
-        const finalUrl = absoluteUrl(canonical, response.url || articleUrl.toString());
+        const finalUrl = absoluteUrl(canonical, currentUrl);
         res.json({
             articleUrl: articleUrl.toString(),
             canonicalUrl: finalUrl,
@@ -154,6 +92,15 @@ router.use(async (req, res, next) => {
 
 router.get("/", async (req, res) => {
     res.json(campaigns.filter(item => item.userId === req.workspaceId));
+});
+
+router.post("/discover", async (req, res) => {
+    try {
+        const result = await discoverArticleUrls(String(req.body?.url || "").trim());
+        res.json(result);
+    } catch (error) {
+        res.status(422).json({ error: error?.name === "TimeoutError" ? "Website scan timed out." : error.message || "Website articles could not be discovered." });
+    }
 });
 
 router.post("/ai/health", async (_req, res) => {

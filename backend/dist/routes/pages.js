@@ -1,19 +1,30 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.pageAccessTokens = void 0;
+exports.pageMetadata = exports.pageAccessTokens = void 0;
 exports.pageTokenKey = pageTokenKey;
 exports.clearPageAccessTokens = clearPageAccessTokens;
 const express_1 = require("express");
 const auth_js_1 = require("./auth.js");
 const router = (0, express_1.Router)();
 exports.pageAccessTokens = {};
+exports.pageMetadata = {};
 function pageTokenKey(workspaceScopeId, pageId) {
     return `${workspaceScopeId}:${pageId}`;
+}
+function clearAccountPageCache(workspaceScopeId, accountId) {
+    for (const [key, metadata] of Object.entries(exports.pageMetadata)) {
+        if (key.startsWith(`${workspaceScopeId}:`) && metadata.accountId === accountId) {
+            delete exports.pageMetadata[key];
+            delete exports.pageAccessTokens[key];
+        }
+    }
 }
 function clearPageAccessTokens(workspaceScopeId) {
     for (const key of Object.keys(exports.pageAccessTokens)) {
         if (!workspaceScopeId || key.startsWith(`${workspaceScopeId}:`))
             delete exports.pageAccessTokens[key];
+        if (!workspaceScopeId || key.startsWith(`${workspaceScopeId}:`))
+            delete exports.pageMetadata[key];
     }
 }
 router.get("/", async (req, res) => {
@@ -31,25 +42,34 @@ router.get("/", async (req, res) => {
                 name: `Facebook Page ${String(i + 1).padStart(2, "0")}`,
                 account: `Facebook Account ${accountNumber}`,
                 accountId: `demo-account-${accountNumber}`,
-                connected: true
+                connected: true,
+                authorized: true,
+                authorizationStatus: "Authorized"
             };
         });
-        res.json(demoPages.filter((page) => !accountId || page.accountId === accountId));
+        const filteredPages = demoPages.filter((page) => !accountId || page.accountId === accountId);
+        for (const page of filteredPages) {
+            exports.pageMetadata[pageTokenKey(workspaceScopeId, page.id)] = page;
+        }
+        res.json(filteredPages);
         return;
     }
     const account = (0, auth_js_1.getFacebookAccount)(accountId, workspaceScopeId);
     if (account?.accessToken) {
+        clearAccountPageCache(workspaceScopeId, account.id);
         try {
             const params = new URLSearchParams({
-                fields: "id,name,access_token,picture",
+                fields: "id,name,access_token,picture,tasks",
                 limit: "100",
                 access_token: account.accessToken
             });
-            let response = await fetch(`https://graph.facebook.com/v23.0/me/accounts?${params}`);
+            let response = await fetch(`https://graph.facebook.com/v23.0/me/accounts?${params}`, {
+                signal: AbortSignal.timeout(15000)
+            });
             let data = await response.json();
             const allPages = [...(data.data || [])];
             for (let i = 0; response.ok && data.paging?.next && i < 10; i += 1) {
-                response = await fetch(data.paging.next);
+                response = await fetch(data.paging.next, { signal: AbortSignal.timeout(15000) });
                 data = await response.json();
                 allPages.push(...(data.data || []));
             }
@@ -58,17 +78,48 @@ router.get("/", async (req, res) => {
                 res.status(502).json({ error: "Facebook Pages could not be loaded", details: data });
                 return;
             }
-            for (const page of data.data || []) {
-                exports.pageAccessTokens[pageTokenKey(workspaceScopeId, page.id)] = page.access_token;
+            let grantedPermissions = [];
+            let permissionsVerified = false;
+            let permissionStatus = "";
+            try {
+                const permissionParams = new URLSearchParams({ access_token: account.accessToken });
+                const permissionResponse = await fetch(`https://graph.facebook.com/v23.0/me/permissions?${permissionParams}`, {
+                    signal: AbortSignal.timeout(10000)
+                });
+                const permissionData = await permissionResponse.json();
+                permissionsVerified = permissionResponse.ok && Array.isArray(permissionData.data);
+                grantedPermissions = permissionsVerified
+                    ? permissionData.data.filter(permission => permission.status === "granted").map(permission => permission.permission)
+                    : [];
+                if (!permissionsVerified) permissionStatus = "Facebook permissions could not be verified.";
+            } catch {
+                permissionStatus = "Facebook permissions could not be verified.";
             }
-            res.json((data.data || []).map((page) => ({
-                id: page.id,
-                name: page.name,
-                account: account.name,
-                accountId: account.id,
-                pictureUrl: page.picture?.data?.url,
-                connected: true
-            })));
+            for (const page of data.data || []) {
+                const tasks = Array.isArray(page.tasks) ? page.tasks : [];
+                const hasPageTask = tasks.includes("CREATE_CONTENT") || tasks.includes("MANAGE");
+                const hasPublishingScope = grantedPermissions.includes("pages_manage_posts");
+                const authorized = permissionsVerified && hasPageTask && hasPublishingScope;
+                const authorizationStatus = authorized
+                    ? "Authorized to publish"
+                    : permissionStatus || (!hasPageTask
+                        ? "Facebook Page role lacks publishing access"
+                        : "Reconnect Facebook to grant pages_manage_posts");
+                const metadata = {
+                    id: page.id,
+                    name: page.name,
+                    account: account.name,
+                    accountId: account.id,
+                    pictureUrl: page.picture?.data?.url,
+                    connected: true,
+                    authorized,
+                    authorizationStatus
+                };
+                const key = pageTokenKey(workspaceScopeId, page.id);
+                exports.pageAccessTokens[key] = page.access_token;
+                exports.pageMetadata[key] = metadata;
+            }
+            res.json((data.data || []).map(page => exports.pageMetadata[pageTokenKey(workspaceScopeId, page.id)]));
             return;
         }
         catch {

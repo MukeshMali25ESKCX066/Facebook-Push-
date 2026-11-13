@@ -19,6 +19,7 @@ require.cache[persistPath] = {
 
 const express = require("express");
 const auth = require("../dist/routes/auth.js");
+const pages = require("../dist/routes/pages.js");
 auth.getWorkspaceScopeId = async req => req.headers["x-test-workspace"] || "";
 const automaticCampaigns = require("../dist/routes/automatic-campaigns.js").default;
 const app = express();
@@ -53,11 +54,55 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     const campaign = await created.json();
     assert.equal(campaign.status, "draft");
     assert.equal(campaign.timezone, "Asia/Kolkata");
+    assert.deepEqual(campaign.pages, []);
+    assert.deepEqual(campaign.articleUrls, []);
+
+    pages.pageMetadata[pages.pageTokenKey("account:workspace-a", "page-a")] = {
+        id: "page-a",
+        name: "Page A",
+        account: "Facebook Account A",
+        accountId: "account-a",
+        connected: true,
+        authorized: true
+    };
+    const updated = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+            pages: [{ id: "page-a", name: "Untrusted page name" }],
+            articleUrls: [{ url: "https://example.com/article-one", title: "Article One" }],
+            currentStep: 4
+        })
+    });
+    assert.equal(updated.status, 200);
+    const updatedCampaign = await updated.json();
+    assert.equal(updatedCampaign.pages[0].name, "Page A");
+    assert.equal(updatedCampaign.pages[0].authorized, true);
+    assert.equal(updatedCampaign.articleUrls[0].status, "Ready");
+    assert.equal(updatedCampaign.currentStep, 4);
+
+    pages.pageMetadata[pages.pageTokenKey("account:workspace-a", "page-denied")] = {
+        id: "page-denied",
+        name: "Denied Page",
+        connected: true,
+        authorized: false
+    };
+    const deniedPage = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ pages: [{ id: "page-denied" }] })
+    });
+    assert.equal(deniedPage.status, 400);
+
+    const inaccessibleCampaign = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
+        headers: { "x-test-workspace": "account:workspace-b" }
+    });
+    assert.equal(inaccessibleCampaign.status, 404);
 
     const ownCampaigns = await fetch(`${baseUrl}/api/automatic-campaigns`, {
         headers: { "x-test-workspace": "account:workspace-a" }
     });
-    assert.deepEqual(await ownCampaigns.json(), [campaign]);
+    assert.deepEqual(await ownCampaigns.json(), [updatedCampaign]);
 
     const otherWorkspaceCampaigns = await fetch(`${baseUrl}/api/automatic-campaigns`, {
         headers: { "x-test-workspace": "account:workspace-b" }
@@ -76,4 +121,29 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         })
     });
     assert.equal(invalidRange.status, 400);
+
+    const csv = new FormData();
+    csv.append("file", new Blob(["URL,Title\nhttps://example.com/article-two,Article Two\n"], { type: "text/csv" }), "articles.csv");
+    const csvImport = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/import-urls`, {
+        method: "POST",
+        headers: { "x-test-workspace": "account:workspace-a" },
+        body: csv
+    });
+    assert.equal(csvImport.status, 200);
+    assert.equal((await csvImport.json()).articleUrls.length, 2);
+
+    const ExcelJS = require("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Articles");
+    worksheet.addRow(["URL"]);
+    worksheet.addRow(["https://example.com/article-three"]);
+    const excelFile = new FormData();
+    excelFile.append("file", new Blob([await workbook.xlsx.writeBuffer()], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "articles.xlsx");
+    const excelImport = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/import-urls`, {
+        method: "POST",
+        headers: { "x-test-workspace": "account:workspace-a" },
+        body: excelFile
+    });
+    assert.equal(excelImport.status, 200);
+    assert.equal((await excelImport.json()).articleUrls.length, 3);
 });
