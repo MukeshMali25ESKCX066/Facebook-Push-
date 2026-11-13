@@ -14,7 +14,6 @@ const posts_js_1 = __importDefault(require("./routes/posts.js"));
 const campaigns_js_1 = __importDefault(require("./routes/campaigns.js"));
 const scheduler_js_1 = __importDefault(require("./routes/scheduler.js"));
 const analytics_js_1 = __importDefault(require("./routes/analytics.js"));
-const studio_js_1 = __importDefault(require("./routes/studio.js"));
 const app = (0, express_1.default)();
 app.set("trust proxy", 1);
 app.use((req, res, next) => {
@@ -65,7 +64,6 @@ app.use("/api/posts", posts_js_1.default);
 app.use("/api/campaigns", campaigns_js_1.default);
 app.use("/api/scheduler", scheduler_js_1.default);
 app.use("/api/analytics", analytics_js_1.default);
-app.use("/api/studio", studio_js_1.default);
 app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     const candidateStatus = Number(error.status || error.statusCode);

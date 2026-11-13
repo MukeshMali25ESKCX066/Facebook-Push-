@@ -1,6 +1,6 @@
 (function () {
   const root = document.getElementById("event-app");
-  const state = { campaigns: [], schedules: [], pages: [], library: { urls: [], images: [] }, editingId: "", article: {}, image: "", loadingPages: false };
+  const state = { campaigns: [], schedules: [], pages: [], editingId: "", article: {}, image: "", loadingPages: false };
   const requestedCampaignId = new URLSearchParams(window.location.search).get("campaign") || "";
 
   function escapeHtml(value) {
@@ -230,8 +230,7 @@
         id: input.value,
         name: input.dataset.name,
         pictureUrl: page?.pictureUrl || "",
-        articleUrl: assets?.querySelector("[data-page-asset-url]")?.value || "",
-        libraryImageId: assets?.querySelector("[data-page-asset-image]")?.value || ""
+        articleUrl: assets?.querySelector("[data-page-asset-url]")?.value || ""
       };
     });
   }
@@ -252,11 +251,7 @@
   async function renderPages() {
     const list = root.querySelector("#event-pages-list");
     try {
-      [state.pages, state.library.urls, state.library.images] = await Promise.all([
-        request("/api/pages"),
-        request("/api/studio/urls"),
-        request("/api/studio/images")
-      ]);
+      state.pages = await request("/api/pages");
       if (!state.pages.length) {
         list.innerHTML = `<div class="event-pages-empty">No connected Facebook Pages were found. Connect a Facebook account in PageCrew, then return here. Your campaign can still be saved as a draft.</div>`;
         return;
@@ -271,17 +266,17 @@
           <span class="event-page-state">${page.connected ? "Connected" : "Reconnect"}</span>
         </label>`).join("");
       list.querySelectorAll('input[name="targetPage"]').forEach(input => input.addEventListener("change", () => {
-        renderPageAssetSelections(savedPages);
+        renderPageArticleUrls(savedPages);
         updateSummary();
       }));
-      renderPageAssetSelections(savedPages);
+      renderPageArticleUrls(savedPages);
       updateSummary();
     } catch (error) {
       list.innerHTML = `<div class="event-pages-empty">${escapeHtml(error.message)}${error.message.includes("login") ? " Please sign in to PageCrew and reopen this category." : ""}</div>`;
     }
   }
 
-  function renderPageAssetSelections(savedPages = []) {
+  function renderPageArticleUrls(savedPages = []) {
     const container = root.querySelector("#event-page-assets");
     if (!container) return;
     const selected = selectedPages();
@@ -289,30 +284,20 @@
       container.innerHTML = "";
       return;
     }
-    const urlOptions = urlValue => `<option value="">Use campaign URL</option>${urlValue && !state.library.urls.some(item => item.url === urlValue)
-      ? `<option value="${escapeHtml(urlValue)}">${escapeHtml(urlValue)} (saved)</option>` : ""}${state.library.urls.map(item =>
-      `<option value="${escapeHtml(item.url)}">${escapeHtml(item.label || item.url)}</option>`).join("")}`;
-    const imageOptions = `<option value="">No library image</option>${state.library.images.map(item =>
-      `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")}`;
-    container.innerHTML = `<div class="event-page-assets-heading"><strong>URL and image for each Page</strong>
-      <a class="event-link-button" href="/hybrid-studio.html">Manage libraries</a></div>
+    container.innerHTML = `<div class="event-page-assets-heading"><strong>Article URL for each Page</strong></div>
       ${selected.map(page => {
         const saved = savedPages.find(item => item.id === page.id) || {};
         const urlValue = page.articleUrl || saved.articleUrl || "";
-        const imageValue = page.libraryImageId || saved.libraryImageId || "";
         return `<div class="event-page-asset-row" data-page-assets="${escapeHtml(page.id)}">
           <strong>${escapeHtml(page.name)}</strong>
-          <label>Article URL<select data-page-asset-url>${urlOptions(urlValue)}</select></label>
-          <label>Image library<select data-page-asset-image>${imageOptions}</select></label>
-          <span>${imageValue ? "Selected image will be used for this Page." : "Campaign image is used unless you select a library image."}</span>
+          <label>Article URL<input data-page-asset-url type="url" value="${escapeHtml(urlValue)}" placeholder="Use campaign URL"></label>
         </div>`;
       }).join("")}`;
     for (const row of container.querySelectorAll("[data-page-assets]")) {
       const page = selected.find(item => item.id === row.dataset.pageAssets);
       const saved = savedPages.find(item => item.id === row.dataset.pageAssets) || {};
       row.querySelector("[data-page-asset-url]").value = page?.articleUrl || saved.articleUrl || "";
-      row.querySelector("[data-page-asset-image]").value = page?.libraryImageId || saved.libraryImageId || "";
-      row.querySelectorAll("select").forEach(select => select.addEventListener("change", updateSummary));
+      row.querySelector("[data-page-asset-url]").addEventListener("input", updateSummary);
     }
   }
 
@@ -323,6 +308,8 @@
 
   function selectVisiblePages() {
     root.querySelectorAll(".event-page-option:not([hidden]) input").forEach(input => { input.checked = true; });
+    const savedPages = state.campaigns.find(item => item.id === state.editingId)?.pages || [];
+    renderPageArticleUrls(savedPages);
     updateSummary();
   }
 

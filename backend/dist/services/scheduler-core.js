@@ -235,7 +235,6 @@ function generateSchedule({ campaign, settings, pageSettings, approvedContent, i
                 utmUrl,
                 content: buildCaption(content, articleUrl, utmUrl),
                 imageId: content.selectedImageId || "",
-                libraryImageId: content.libraryImageId || "",
                 postType,
                 purpose: getPostPurpose(postType),
                 scheduledAt: slot.scheduledAt.toISOString(),

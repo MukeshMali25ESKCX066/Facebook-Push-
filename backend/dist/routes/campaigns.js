@@ -9,16 +9,13 @@ const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 const express = require("express");
 const auth_js_1 = require("./auth.js");
 const aiContent = require("../services/ai-content.js");
-const library = require("../services/library-store.js");
+const { generatedImageDirectory } = require("../services/generated-image-store.js");
 
 const router = (0, express_1.Router)();
 const campaigns = [];
 exports.findCampaignForWorkspace = (id, workspaceId) =>
     campaigns.find(item => item.id === id && item.userId === workspaceId);
 exports.getCampaignsForWorkspace = workspaceId => campaigns.filter(item => item.userId === workspaceId);
-exports.isLibraryImageInUse = (imageId, workspaceId) => campaigns.some(campaign =>
-    campaign.userId === workspaceId && (campaign.pages || []).some(page => page.libraryImageId === imageId));
-const generatedImageDirectory = library.generatedImageDirectory;
 
 function decodeHtml(value = "") {
     return value
@@ -209,14 +206,12 @@ function aiBriefChanged(campaign, body) {
             id: String(page.id),
             name: String(page.name || ""),
             articleUrl: String(page.articleUrl || ""),
-            libraryImageId: String(page.libraryImageId || "")
         }))
         : [];
     const currentPages = (campaign.pages || []).map(page => ({
         id: String(page.id),
         name: String(page.name || ""),
         articleUrl: String(page.articleUrl || ""),
-        libraryImageId: String(page.libraryImageId || "")
     }));
     return campaign.eventName !== String(body.eventName || "").trim()
         || campaign.eventDate !== String(body.eventDate || "")
@@ -342,9 +337,6 @@ function logAiFailure(req, operation, error) {
 
 function toContentRecord(campaign, page, post, existing) {
     const now = new Date().toISOString();
-    const libraryImage = page?.libraryImageId
-        ? library.getImageForWorkspace(page.libraryImageId, campaign.userId)
-        : null;
     return {
         id: existing?.id || randomUUID(),
         pageId: String(page.id),
@@ -355,10 +347,7 @@ function toContentRecord(campaign, page, post, existing) {
         cta: post.cta,
         hashtags: post.hashtags,
         articleUrl: String(page?.articleUrl || campaign.articleUrl || ""),
-        featuredImage: libraryImage
-            ? `/api/studio/images/${encodeURIComponent(libraryImage.id)}/file`
-            : campaign.featuredImage || "",
-        libraryImageId: libraryImage?.id || "",
+        featuredImage: campaign.featuredImage || "",
         overlayText: existing?.overlayText || "",
         images: existing?.images || [],
         selectedImageId: existing?.selectedImageId || "",
@@ -663,21 +652,16 @@ function validateCampaign(body, allowDraft = false) {
     return errors;
 }
 
-function normalizePages(input, workspaceId) {
+function normalizePages(input) {
     if (!Array.isArray(input)) return [];
     return input.map(page => {
         const articleUrl = String(page.articleUrl || "").trim();
         if (articleUrl) parseHttpUrl(articleUrl);
-        const libraryImageId = String(page.libraryImageId || "");
-        if (libraryImageId && !library.getImageForWorkspace(libraryImageId, workspaceId)) {
-            throw new Error("Choose a campaign image from your own workspace library.");
-        }
         return {
             id: String(page.id),
             name: String(page.name || ""),
             pictureUrl: String(page.pictureUrl || ""),
-            articleUrl,
-            libraryImageId
+            articleUrl
         };
     });
 }
@@ -693,7 +677,7 @@ router.post("/", async (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     let pages;
     try {
-        pages = normalizePages(body.pages, req.workspaceId);
+        pages = normalizePages(body.pages);
     } catch (error) {
         return res.status(400).json({ error: error.message });
     }
@@ -740,7 +724,7 @@ router.put("/:id", async (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     let pages;
     try {
-        pages = normalizePages(body.pages, req.workspaceId);
+        pages = normalizePages(body.pages);
     } catch (error) {
         return res.status(400).json({ error: error.message });
     }

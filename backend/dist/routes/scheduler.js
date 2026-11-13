@@ -11,11 +11,10 @@ const postsRoute = require("./posts.js");
 const { publishToPage } = require("../services/meta.js");
 const schedulerCore = require("../services/scheduler-core.js");
 const schedulerWorker = require("../services/scheduler-worker.js");
-const library = require("../services/library-store.js");
 
 const router = Router();
 const schedules = [];
-const generatedImageDirectory = library.generatedImageDirectory;
+const { generatedImageDirectory } = require("../services/generated-image-store.js");
 
 function persistSchedules() {
     return saveSchedules();
@@ -49,13 +48,11 @@ function saveOrRespond(res) {
 }
 
 function publicPost(post, campaignId) {
-    const { imageId, libraryImageId, ...visible } = post;
+    const { imageId, libraryImageId: _libraryImageId, ...visible } = post;
     return {
         ...visible,
         ...(imageId ? {
             imageUrl: `/api/campaigns/${encodeURIComponent(campaignId)}/ai/content/${encodeURIComponent(post.contentId)}/images/${encodeURIComponent(imageId)}`
-        } : libraryImageId ? {
-            imageUrl: `/api/studio/images/${encodeURIComponent(libraryImageId)}/file`
         } : {})
     };
 }
@@ -93,23 +90,18 @@ function findPageToken(workspaceScopeId, pageId) {
 async function publishScheduledPost(schedule, post) {
     const token = findPageToken(schedule.workspaceScopeId, post.pageId);
     if (!token) throw new Error("No Page access token. Reconnect Facebook and reload your Pages.");
-    const libraryImage = post.libraryImageId
-        ? library.getImageForWorkspace(post.libraryImageId, schedule.workspaceScopeId)
-        : null;
-    if (post.libraryImageId && !libraryImage) {
-        throw new Error("The selected campaign library image is no longer available.");
+    if (post.libraryImageId && !post.imageId) {
+        throw new Error("This post used a removed campaign image library. Review its image before retrying.");
     }
     const mediaPath = post.imageId
         ? path.join(generatedImageDirectory, `${post.imageId}.png`)
-        : libraryImage
-            ? path.join(library.imageDirectory, libraryImage.fileName)
-            : "";
+        : "";
     if (mediaPath && !existsSync(mediaPath)) {
         throw new Error("The selected campaign image is no longer available. Edit the post before retrying.");
     }
     return publishToPage(post.pageId, token, post.content, mediaPath ? {
         path: mediaPath,
-        mimeType: libraryImage?.mimeType || "image/png",
+        mimeType: "image/png",
         originalName: `${post.pageName || "campaign"}.png`
     } : undefined);
 }
@@ -194,10 +186,6 @@ setTimeout(() => {
 
 router.getSchedulesForWorkspace = workspaceScopeId =>
     schedules.filter(schedule => schedule.workspaceScopeId === workspaceScopeId);
-router.isLibraryImageInUse = (imageId, workspaceScopeId) => schedules.some(schedule =>
-    schedule.workspaceScopeId === workspaceScopeId &&
-    (schedule.posts || []).some(post => post.libraryImageId === imageId));
-
 router.use(requireWorkspace);
 
 router.get("/", (req, res) => {
