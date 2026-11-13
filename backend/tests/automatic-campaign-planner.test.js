@@ -58,9 +58,11 @@ test("avoids a Page, URL, and image combination from prior rounds when alternati
     assert.notEqual(firstPageAssignment.imageId, "image-1");
 });
 
-test("rejects a matching plan when there are not enough resources for one complete round", () => {
-    assert.throws(() => buildResourcePlan({ pages, articles: articles.slice(0, 1), images }), /at least 2 article URLs/);
-    assert.throws(() => buildResourcePlan({ pages, articles, images: images.slice(0, 1) }), /at least 2 images/);
+test("supports a single shared article link and no images", () => {
+    const plan = buildResourcePlan({ pages, articles: articles.slice(0, 1), images: [] });
+    assert.equal(plan.rounds.length, 1);
+    assert.deepEqual(plan.rounds[0].assignments.map(item => item.articleUrl), ["url-1", "url-1"]);
+    assert.deepEqual(plan.rounds[0].assignments.map(item => item.imageId), ["", ""]);
 });
 
 test("validates the saved publishing schedule and per-Page limits", () => {
@@ -216,21 +218,21 @@ test("publishes at fixed five-minute intervals and repeats assigned resources wh
     assert.equal(singlePass.posts.length, 1);
 });
 
-test("rejects incomplete or unapproved generated content before schedule creation", () => {
+test("publishes article links when captions are missing or awaiting approval", () => {
     const campaign = {
         campaignName: "Rajasthan Events",
         startDate: "2026-11-13",
         endDate: "2026-11-14",
         pages: [pages[0]],
         articleUrls: [{ url: "https://example.com/one" }],
-        imageIds: ["image-a"],
+        imageIds: [],
         resourceAssignments: [{
             roundIndex: 0,
             assignments: [{
                 pageId: pages[0].id,
                 pageName: pages[0].name,
                 articleUrl: "https://example.com/one",
-                imageId: "image-a",
+                imageId: "",
                 roundIndex: 0
             }]
         }],
@@ -253,18 +255,22 @@ test("rejects incomplete or unapproved generated content before schedule creatio
         pageSettings: { "page-a": { intervalMinutes: 15, dailyPostLimit: 4 } }
     }, [pages[0]]);
 
-    assert.throws(() => generateAutomaticSchedule({
+    const schedule = generateAutomaticSchedule({
         campaign,
         settings,
         now: Date.parse("2026-11-12T00:00:00.000Z")
-    }), /Approve every generated post/);
+    });
+    assert.ok(schedule.posts.length > 0);
+    assert.ok(schedule.posts.every(post => !post.libraryImageId && post.content.includes("https://example.com/one")));
     campaign.publishingSettings = settings;
     campaign.aiContent = [];
-    assert.throws(() => generateAutomaticSchedule({
+    const linkOnly = generateAutomaticSchedule({
         campaign,
         settings: { ...settings, automaticApproval: true },
         now: Date.parse("2026-11-12T00:00:00.000Z")
-    }), /Generate captions for every matching round/);
+    });
+    assert.ok(linkOnly.posts.length > 0);
+    assert.ok(linkOnly.posts.every(post => !post.libraryImageId));
 });
 
 test("enforces Page intervals across adjacent campaign days during DST", () => {

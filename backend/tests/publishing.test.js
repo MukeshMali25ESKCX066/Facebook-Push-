@@ -64,6 +64,40 @@ test("uploads a scheduled image with Facebook's scheduling fields", async () => 
     }
 });
 
+test("publishes a campaign image as a clickable article link preview", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pagecrew-publishing-"));
+    const mediaPath = join(directory, "post.png");
+    const originalFetch = global.fetch;
+    let request;
+
+    try {
+        await writeFile(mediaPath, Buffer.from("test image"));
+        global.fetch = async (url, options) => {
+            request = { url, options };
+            return Response.json({ id: "linked-photo-post-1" });
+        };
+
+        const destinationUrl = "https://example.com/story?utm_source=facebook";
+        const postId = await publishToPage("page-1", "page-token", "Read the story.", {
+            path: mediaPath,
+            mimeType: "image/png",
+            originalName: "post.png"
+        }, undefined, destinationUrl);
+
+        assert.equal(postId, "linked-photo-post-1");
+        assert.equal(request.url, "https://graph.facebook.com/v23.0/page-1/feed");
+        assert.equal(request.options.body.get("message"), "Read the story.");
+        assert.equal(request.options.body.get("link"), destinationUrl);
+        assert.equal(request.options.body.get("thumbnail").type, "image/png");
+        assert.equal(request.options.body.get("access_token"), "page-token");
+        assert.equal(request.options.body.has("source"), false);
+    }
+    finally {
+        global.fetch = originalFetch;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("surfaces Facebook Graph API errors with the provider error code", async () => {
     const originalFetch = global.fetch;
     global.fetch = async () => Response.json({

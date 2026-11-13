@@ -103,7 +103,7 @@ async function publishScheduledPost(schedule, post) {
             path: imagePath,
             mimeType: image.mimeType,
             originalName: image.originalName
-        });
+        }, undefined, post.utmUrl || post.articleUrl);
     }
     const mediaPath = post.imageId
         ? path.join(generatedImageDirectory, `${post.imageId}.png`)
@@ -115,7 +115,7 @@ async function publishScheduledPost(schedule, post) {
         path: mediaPath,
         mimeType: "image/png",
         originalName: `${post.pageName || "campaign"}.png`
-    } : undefined);
+    } : undefined, undefined, post.utmUrl || post.articleUrl);
 }
 
 function assertNoPageConflicts(candidate, workspaceScopeId, ignoredSchedule) {

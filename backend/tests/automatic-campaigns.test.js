@@ -286,8 +286,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const incompleteReadiness = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/readiness`, { headers });
         assert.equal(incompleteReadiness.status, 200);
         const incompleteChecks = await incompleteReadiness.json();
-        assert.equal(incompleteChecks.ready, false);
-        assert.equal(incompleteChecks.checks.find(item => item.name === "Generated and approved posts").ready, false);
+        assert.equal(incompleteChecks.ready, true, JSON.stringify(incompleteChecks.checks));
+        assert.equal(incompleteChecks.checks.find(item => item.name === "Article link publishing").ready, true);
 
         const generatedSecondRound = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/ai-content/generate`, {
             method: "POST",
@@ -369,6 +369,49 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         assert.deepEqual(invalidated.aiContent, []);
         assert.equal(invalidated.aiSettings, null);
         assert.equal(invalidated.publishingSettings, null);
+
+        const linkOnlyCreated = await fetch(`${baseUrl}/api/automatic-campaigns`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ campaignName: "Link-only campaign" })
+        });
+        assert.equal(linkOnlyCreated.status, 201);
+        const linkOnlyCampaign = await linkOnlyCreated.json();
+        assert.equal(linkOnlyCampaign.campaignType, "Event");
+        assert.equal(linkOnlyCampaign.timezone, "Asia/Kolkata");
+        assert.ok(linkOnlyCampaign.startDate);
+        assert.ok(linkOnlyCampaign.endDate);
+        const linkOnlySaved = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+                pages: [{ id: "page-a" }],
+                articleUrls: [{ url: "https://example.com/link-only", title: "Link-only article" }]
+            })
+        });
+        assert.equal(linkOnlySaved.status, 200);
+
+        const linkOnlyReadinessResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}/readiness`, { headers });
+        assert.equal(linkOnlyReadinessResponse.status, 200);
+        const linkOnlyReadiness = await linkOnlyReadinessResponse.json();
+        assert.equal(linkOnlyReadiness.ready, true, JSON.stringify(linkOnlyReadiness.checks));
+        assert.equal(linkOnlyReadiness.checks.find(item => item.name === "Campaign images").ready, true);
+        assert.equal(linkOnlyReadiness.checks.find(item => item.name === "AI captions").ready, true);
+        assert.equal(linkOnlyReadiness.schedulePreview.postCount > 0, true);
+
+        const aiCallsBeforeLinkOnlyActivation = generationCall;
+        const linkOnlyActivated = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}/activate`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({})
+        });
+        assert.equal(linkOnlyActivated.status, 200);
+        const linkOnlyResult = await linkOnlyActivated.json();
+        assert.equal(linkOnlyResult.campaign.status, "active");
+        assert.equal(linkOnlyResult.schedule.posts.every(post => !post.libraryImageId), true);
+        assert.equal(linkOnlyResult.schedule.posts[0].content.includes("https://example.com/link-only"), true);
+        assert.equal(linkOnlyResult.campaign.publishingSettings.enabled, true);
+        assert.equal(generationCall, aiCallsBeforeLinkOnlyActivation);
     } finally {
         aiContent.generateContent = originalGenerateContent;
     }

@@ -4,6 +4,7 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const WEEKEND_DAYS = new Set(["Saturday", "Sunday"]);
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const schedulerCore = require("./scheduler-core.js");
+const { randomUUID } = require("node:crypto");
 
 function combinationKey(pageId, articleUrl, imageId) {
     return `${pageId}\u0000${articleUrl}\u0000${imageId}`;
@@ -11,14 +12,11 @@ function combinationKey(pageId, articleUrl, imageId) {
 
 function buildResourcePlan({ pages, articles, images, previousHistory = [] }) {
     if (!Array.isArray(pages) || !pages.length) throw new Error("Select at least one Facebook Page before matching resources.");
-    if (!Array.isArray(articles) || articles.length < pages.length) {
-        throw new Error(`Select at least ${pages.length} article URLs so each Page can receive a different URL in every round.`);
-    }
-    if (!Array.isArray(images) || images.length < pages.length) {
-        throw new Error(`Select at least ${pages.length} images so each Page can receive a different image in every round.`);
-    }
+    if (!Array.isArray(articles) || !articles.length) throw new Error("Add at least one article URL.");
+    if (!Array.isArray(images)) throw new Error("Campaign images must be a list.");
 
     const roundCount = Math.max(
+        1,
         Math.ceil(articles.length / pages.length),
         Math.ceil(images.length / pages.length)
     );
@@ -26,53 +24,53 @@ function buildResourcePlan({ pages, articles, images, previousHistory = [] }) {
     const seen = new Set(history.map(entry => combinationKey(entry.pageId, entry.articleUrl, entry.imageId)));
     const unusedImages = new Set(images.map(image => image.id));
     const rounds = [];
-    let remainingAssignments = roundCount * pages.length;
 
     for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
         const roundArticles = pages.map((_, pageIndex) => articles[(roundIndex * pages.length + pageIndex) % articles.length]);
         const usedImageIndexes = new Set();
         const assignments = pages.map((page, pageIndex) => {
             const article = roundArticles[pageIndex];
-            const preferredImageIndex = (roundIndex * pages.length + pageIndex) % images.length;
-            let candidates = images
-                .map((_, index) => index)
-                .filter(index => !usedImageIndexes.has(index))
-                .sort((left, right) => {
-                    const leftUnused = unusedImages.has(images[left].id) ? 0 : 1;
-                    const rightUnused = unusedImages.has(images[right].id) ? 0 : 1;
-                    if (leftUnused !== rightUnused) return leftUnused - rightUnused;
-                    const leftSeen = seen.has(combinationKey(page.id, article.url, images[left].id)) ? 1 : 0;
-                    const rightSeen = seen.has(combinationKey(page.id, article.url, images[right].id)) ? 1 : 0;
-                    if (leftSeen !== rightSeen) return leftSeen - rightSeen;
-                    return (left === preferredImageIndex ? -1 : 0) - (right === preferredImageIndex ? -1 : 0);
-                });
-            if (unusedImages.size === remainingAssignments) {
-                candidates = candidates.filter(index => unusedImages.has(images[index].id));
+            let image;
+            if (images.length) {
+                const preferredImageIndex = (roundIndex * pages.length + pageIndex) % images.length;
+                const candidates = images
+                    .map((_, index) => index)
+                    .filter(index => images.length < pages.length || !usedImageIndexes.has(index))
+                    .sort((left, right) => {
+                      const leftUnused = unusedImages.has(images[left].id) ? 0 : 1;
+                      const rightUnused = unusedImages.has(images[right].id) ? 0 : 1;
+                      if (leftUnused !== rightUnused) return leftUnused - rightUnused;
+                      const leftSeen = seen.has(combinationKey(page.id, article.url, images[left].id)) ? 1 : 0;
+                      const rightSeen = seen.has(combinationKey(page.id, article.url, images[right].id)) ? 1 : 0;
+                      if (leftSeen !== rightSeen) return leftSeen - rightSeen;
+                      return (left === preferredImageIndex ? -1 : 0) - (right === preferredImageIndex ? -1 : 0);
+                    });
+                const imageIndex = candidates[0];
+                image = images[imageIndex];
+                usedImageIndexes.add(imageIndex);
+                unusedImages.delete(image.id);
             }
-            const imageIndex = candidates[0];
-            usedImageIndexes.add(imageIndex);
-            const image = images[imageIndex];
-            unusedImages.delete(image.id);
-            remainingAssignments -= 1;
             const assignment = {
                 pageId: String(page.id),
                 pageName: String(page.name || ""),
                 articleUrl: article.url,
                 articleTitle: article.title || "",
                 articleDescription: article.description || "",
-                imageId: image.id,
-                imageName: image.originalName,
-                folderPath: image.folderPath || "",
+                imageId: image?.id || "",
+                imageName: image?.originalName || "",
+                folderPath: image?.folderPath || "",
                 roundIndex
             };
-            const key = combinationKey(assignment.pageId, assignment.articleUrl, assignment.imageId);
-            history.push({
-                pageId: assignment.pageId,
-                articleUrl: assignment.articleUrl,
-                imageId: assignment.imageId,
-                usedAt: new Date().toISOString()
-            });
-            seen.add(key);
+            if (assignment.imageId) {
+                const key = combinationKey(assignment.pageId, assignment.articleUrl, assignment.imageId);
+                history.push({
+                    pageId: assignment.pageId,
+                    articleUrl: assignment.articleUrl,
+                    imageId: assignment.imageId,
+                    usedAt: new Date().toISOString()
+                });
+                seen.add(key);
+            }
             return assignment;
         });
         rounds.push({ roundIndex, assignments });
@@ -184,7 +182,14 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
     const imageIds = new Set((campaign.imageIds || []).map(String));
     const contentByPage = new Map(campaignPages.map(page => [String(page.id), []]));
     const assignments = new Map();
-    for (const round of campaign.resourceAssignments || []) {
+    const resourceRounds = campaign.resourceAssignments?.length
+        ? campaign.resourceAssignments
+        : buildResourcePlan({
+            pages: campaignPages,
+            articles: campaign.articleUrls || [],
+            images: []
+        }).rounds;
+    for (const round of resourceRounds) {
         const assignedPages = new Set();
         const assignedUrls = new Set();
         const assignedImages = new Set();
@@ -193,15 +198,19 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             if (assignments.has(key) || assignedPages.has(String(assignment.pageId))) {
                 throw new Error("The matching plan contains duplicate Page assignments.");
             }
-            if (assignedUrls.has(assignment.articleUrl) || assignedImages.has(assignment.imageId)) {
-                throw new Error("Each Page must receive a unique URL and image within a matching round.");
+            if ((campaign.articleUrls || []).length >= campaignPages.length && assignedUrls.has(assignment.articleUrl)) {
+                throw new Error("Each Page must receive a unique URL within a matching round when enough URLs are selected.");
             }
-            if (!articleUrls.has(String(assignment.articleUrl)) || !imageIds.has(String(assignment.imageId))) {
+            if (assignment.imageId && (campaign.imageIds || []).length >= campaignPages.length && assignedImages.has(assignment.imageId)) {
+                throw new Error("Each Page must receive a unique image within a matching round when enough images are selected.");
+            }
+            if (!articleUrls.has(String(assignment.articleUrl)) ||
+                (assignment.imageId && !imageIds.has(String(assignment.imageId)))) {
                 throw new Error("The matching plan references a URL or image that is no longer selected.");
             }
             assignedPages.add(String(assignment.pageId));
             assignedUrls.add(assignment.articleUrl);
-            assignedImages.add(assignment.imageId);
+            if (assignment.imageId) assignedImages.add(assignment.imageId);
             assignments.set(key, assignment);
         }
         if (assignedPages.size !== campaignPages.length ||
@@ -218,26 +227,35 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
     }
 
     for (const [key, assignment] of assignments) {
-        const content = generatedByRoundAndPage.get(key);
-        if (!content || !String(content.caption || "").trim()) {
-            throw new Error(`Generate captions for every matching round before activation. Missing ${assignment.pageName || "Page"} in round ${assignment.roundIndex + 1}.`);
-        }
-        if (!settings.automaticApproval && content.status !== "approved") {
-            throw new Error(`Approve every generated post before activation. ${assignment.pageName || "A Page"} in round ${assignment.roundIndex + 1} is not approved.`);
-        }
         if (!pageIds.has(String(assignment.pageId))) {
             throw new Error("The matching plan references a Page that is no longer selected.");
         }
-        if (String(content.imageId || "") !== String(assignment.imageId || "") ||
-            String(content.articleUrl || "") !== String(assignment.articleUrl || "")) {
-            throw new Error("Generated content no longer matches the saved Page, URL, and image assignments.");
+        const article = (campaign.articleUrls || []).find(item => String(item.url) === String(assignment.articleUrl));
+        if (!article) throw new Error("The matching plan references an article URL that is no longer selected.");
+        const candidate = generatedByRoundAndPage.get(key);
+        const useAiCaption = candidate && String(candidate.caption || "").trim() &&
+            String(candidate.articleUrl || "") === String(assignment.articleUrl || "") &&
+            String(candidate.imageId || "") === String(assignment.imageId || "") &&
+            (settings.automaticApproval || candidate.status === "approved");
+        const content = useAiCaption
+            ? candidate
+            : {
+                id: randomUUID(),
+                pageId: assignment.pageId,
+                pageName: assignment.pageName,
+                caption: article.title ? `Read more: ${article.title}` : "Read the article:",
+                cta: "",
+                hashtags: [],
+                articleUrl: assignment.articleUrl,
+                imageId: assignment.imageId || "",
+                status: "approved"
+            };
+        if (!String(content.caption || "").trim()) {
+            throw new Error(`Add an article title or generate a caption for ${assignment.pageName || "a Page"}.`);
         }
         contentByPage.get(String(assignment.pageId)).push({ ...content, assignment });
     }
-    if (!assignments.size || generatedByRoundAndPage.size !== assignments.size ||
-        (campaign.aiContent || []).length !== assignments.size) {
-        throw new Error("Generate captions for every matching round before activation.");
-    }
+    if (!assignments.size) throw new Error("Add at least one article URL before activation.");
 
     const pages = [];
     const posts = [];

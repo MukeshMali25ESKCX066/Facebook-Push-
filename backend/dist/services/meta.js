@@ -10,26 +10,43 @@ function firstUrl(text) {
         return undefined;
     return match[0].replace(/[.,;:!?]+$/, "");
 }
-async function publishToPage(pageId, pageToken, message, media, scheduledAt) {
+async function publishToPage(pageId, pageToken, message, media, scheduledAt, destinationUrl) {
     const publishAt = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
     let res;
     if (media) {
         const isVideo = media.mimeType.startsWith("video/");
+        const link = destinationUrl || firstUrl(message);
         const body = new FormData();
-        body.append("source", await (0, node_fs_1.openAsBlob)(media.path, { type: media.mimeType }), media.originalName);
-        body.append(isVideo ? "description" : "caption", message);
-        body.append("access_token", pageToken);
-        if (publishAt) {
-            body.append("published", "false");
-            body.append("scheduled_publish_time", String(publishAt));
+        if (!isVideo && link) {
+            body.append("message", message);
+            body.append("link", link);
+            body.append("thumbnail", await (0, node_fs_1.openAsBlob)(media.path, { type: media.mimeType }), media.originalName);
+            body.append("access_token", pageToken);
+            if (publishAt) {
+                body.append("published", "false");
+                body.append("scheduled_publish_time", String(publishAt));
+            }
+            res = await fetch(`https://graph.facebook.com/v23.0/${pageId}/feed`, {
+                method: "POST",
+                body
+            });
         }
-        res = await fetch(`https://graph.facebook.com/v23.0/${pageId}/${isVideo ? "videos" : "photos"}`, {
-            method: "POST",
-            body
-        });
+        else {
+            body.append("source", await (0, node_fs_1.openAsBlob)(media.path, { type: media.mimeType }), media.originalName);
+            body.append(isVideo ? "description" : "caption", message);
+            body.append("access_token", pageToken);
+            if (publishAt) {
+                body.append("published", "false");
+                body.append("scheduled_publish_time", String(publishAt));
+            }
+            res = await fetch(`https://graph.facebook.com/v23.0/${pageId}/${isVideo ? "videos" : "photos"}`, {
+                method: "POST",
+                body
+            });
+        }
     }
     else {
-        const link = firstUrl(message);
+        const link = destinationUrl || firstUrl(message);
         res = await fetch(`https://graph.facebook.com/v23.0/${pageId}/feed`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -51,11 +51,14 @@ function validDate(value) {
 function validateCampaign(body) {
     const errors = [];
     const campaignName = String(body.campaignName || "").trim();
-    const campaignType = String(body.campaignType || "");
+    const campaignType = String(body.campaignType || "Event");
     const description = String(body.description || "").trim();
-    const startDate = String(body.startDate || "");
-    const endDate = String(body.endDate || "");
-    const timezone = String(body.timezone || "");
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = String(body.startDate || today);
+    const defaultEnd = new Date(`${validDate(startDate) ? startDate : today}T12:00:00.000Z`);
+    defaultEnd.setUTCDate(defaultEnd.getUTCDate() + 30);
+    const endDate = String(body.endDate || defaultEnd.toISOString().slice(0, 10));
+    const timezone = String(body.timezone || "Asia/Kolkata");
 
     if (!campaignName || campaignName.length > 120) {
         errors.push("Campaign name is required and must be 120 characters or fewer.");
@@ -132,6 +135,60 @@ function validateArticleUrls(value) {
     });
 }
 
+function defaultPublishingSettings(campaign, selectedPages) {
+    const scheduleDays = Object.fromEntries(
+        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            .map(day => [day, { enabled: !["Saturday", "Sunday"].includes(day), times: [] }])
+    );
+    return validatePublishingSettings({
+        enabled: true,
+        automaticApproval: true,
+        roundRobin: true,
+        repeatResources: true,
+        timezone: campaign.timezone || "Asia/Kolkata",
+        allowedHours: { start: "09:00", end: "10:00" },
+        weekendPublishing: false,
+        scheduleDays,
+        pageSettings: Object.fromEntries(selectedPages.map(page =>
+            [page.id, { intervalMinutes: 60, dailyPostLimit: 1 }])),
+        retryAttempts: 3,
+        retryDelayMinutes: 5
+    }, selectedPages, campaign.timezone || "Asia/Kolkata");
+}
+
+function getScheduleCampaign(campaign, workspaceScopeId) {
+    const articles = validateArticleUrls(campaign.articleUrls || []);
+    const availableImages = (campaign.imageIds || [])
+        .map(id => mediaLibrary.findImage(workspaceScopeId, id))
+        .filter(image => image && existsSync(mediaLibrary.getImageFilePath(image)));
+    const availableImageIds = new Set(availableImages.map(image => String(image.id)));
+    const selectedPages = campaign.pages || [];
+    const currentPlanValid = (campaign.resourceAssignments || []).length > 0 &&
+        campaign.resourceAssignments.every(round =>
+            (round.assignments || []).length === selectedPages.length &&
+            round.assignments.every(assignment =>
+                selectedPages.some(page => String(page.id) === String(assignment.pageId)) &&
+                articles.some(article => article.url === assignment.articleUrl) &&
+                (!assignment.imageId || availableImageIds.has(String(assignment.imageId)))
+            )
+        );
+    const plan = currentPlanValid
+        ? { rounds: campaign.resourceAssignments, history: campaign.matchingHistory || [] }
+        : buildResourcePlan({
+            pages: selectedPages,
+            articles,
+            images: availableImages,
+            previousHistory: campaign.matchingHistory || []
+        });
+    return {
+        ...campaign,
+        articleUrls: articles,
+        imageIds: availableImages.map(image => image.id),
+        resourceAssignments: plan.rounds,
+        matchingHistory: plan.history
+    };
+}
+
 function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     const checks = [];
     const check = (name, ready, message) => checks.push({ name, ready, message });
@@ -163,52 +220,37 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     }
     check("Article URLs", articlesReady, articlesMessage);
 
-    let imagesReady = false;
-    let imagesMessage = "Select campaign images.";
-    try {
-        const imageIds = mediaLibrary.validateImageIds(workspaceScopeId, campaign.imageIds || []);
-        const unavailable = imageIds.filter(id => {
-            const image = mediaLibrary.findImage(workspaceScopeId, id);
-            return !image || !existsSync(mediaLibrary.getImageFilePath(image));
-        });
-        imagesReady = imageIds.length > 0 && unavailable.length === 0;
-        imagesMessage = imagesReady
-            ? `${imageIds.length} selected image(s) are available.`
-            : unavailable.length
-                ? `${unavailable.length} selected image file(s) are missing; upload or replace them before activation.`
-                : "Select at least one campaign image.";
-    } catch (error) {
-        imagesMessage = error.message;
-    }
-    check("Campaign images", imagesReady, imagesMessage);
+    const selectedImageCount = (campaign.imageIds || []).length;
+    const availableImageCount = (campaign.imageIds || []).filter(id => {
+        const image = mediaLibrary.findImage(workspaceScopeId, id);
+        return image && existsSync(mediaLibrary.getImageFilePath(image));
+    }).length;
+    check("Campaign images", true, availableImageCount
+        ? `${availableImageCount} optional image(s) are available.`
+        : selectedImageCount
+            ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
+            : "No images selected; posts will link directly to the article.");
 
-    let aiReady = false;
-    let aiMessage = "";
-    try {
-        aiReady = Boolean(aiContent.getActiveTextProvider().apiKey);
-        if (!aiReady) aiMessage = "The AI provider API key is not configured in the backend.";
-    } catch (error) {
-        aiMessage = error.message;
-    }
-    if (!aiReady && !aiMessage) aiMessage = "Configure a supported AI provider and backend API key.";
-    check("AI provider", aiReady, aiReady
-        ? "The configured AI provider is available."
-        : aiMessage);
+    check("AI captions", true, "Optional. Article links can publish without AI-generated captions.");
 
     let publishingSettings;
     let publishingSettingsError = "";
+    const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
     try {
         publishingSettings = validatePublishingSettings(
-            campaign.publishingSettings,
+            usesDefaultPublishingSettings
+                ? defaultPublishingSettings(campaign, selectedPages)
+                : campaign.publishingSettings,
             selectedPages,
             campaign.timezone
         );
-        if (!publishingSettings.enabled) publishingSettingsError = "Enable auto publishing in Step 8.";
     } catch (error) {
         publishingSettingsError = error.message;
     }
     check("Publishing settings", Boolean(publishingSettings && publishingSettings.enabled), publishingSettingsError ||
-        "Publishing settings are valid and auto publishing is enabled.");
+        (usesDefaultPublishingSettings
+            ? "A safe default of one weekday post per Page at 09:00 will be used on activation."
+            : "Saved publishing settings are valid and auto publishing is enabled."));
 
     const datesReady = validDate(campaign.startDate) && validDate(campaign.endDate) &&
         campaign.endDate >= campaign.startDate;
@@ -216,39 +258,18 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
         ? `${campaign.startDate} through ${campaign.endDate}.`
         : "Set a valid campaign date range with the end date on or after the start date.");
 
-    let contentReady = false;
-    let contentMessage = "Generate captions for every matching round.";
-    if (campaign.resourceAssignments?.length) {
-        const assignments = campaign.resourceAssignments.flatMap(round =>
-            (round.assignments || []).map(assignment => ({ ...assignment, roundIndex: round.roundIndex })));
-        const contentByKey = new Map((campaign.aiContent || []).map(content =>
-            [`${content.roundIndex}:${content.pageId}`, content]));
-        contentReady = assignments.length > 0 &&
-            (campaign.aiContent || []).length === assignments.length &&
-            assignments.every(assignment => {
-                const content = contentByKey.get(`${assignment.roundIndex}:${assignment.pageId}`);
-                return content && String(content.caption || "").trim() &&
-                    String(content.imageId || "") === String(assignment.imageId || "") &&
-                    String(content.articleUrl || "") === String(assignment.articleUrl || "") &&
-                    (publishingSettings?.automaticApproval || content.status === "approved");
-            }) && contentByKey.size === assignments.length;
-        if (contentReady) {
-            contentMessage = `${assignments.length} generated post(s) are ready${publishingSettings?.automaticApproval ? " for automatic approval" : " and approved"}.`;
-        } else if (publishingSettings && !publishingSettings.automaticApproval &&
-            (campaign.aiContent || []).some(content => content.status !== "approved")) {
-            contentMessage = "Approve every generated post, or enable automatic approval in Step 8.";
-        }
-    } else {
-        contentMessage = "Build the Step 6 matching plan and generate captions for every round.";
-    }
-    check("Generated and approved posts", contentReady, contentMessage);
+    const contentReady = articlesReady;
+    check("Article link publishing", contentReady, contentReady
+        ? "Captions, images, and resource matching are optional; article links can publish directly."
+        : "Add at least one valid public article URL to publish.");
 
     let schedulePreview = null;
     let scheduleError = "";
-    if (contentReady && publishingSettings?.enabled && datesReady) {
+    if (pagesReady && contentReady && publishingSettings?.enabled && datesReady) {
         try {
+            const scheduleCampaign = getScheduleCampaign(campaign, workspaceScopeId);
             const generated = generateAutomaticSchedule({
-                campaign,
+                campaign: scheduleCampaign,
                 settings: publishingSettings,
                 now
             });
@@ -260,7 +281,7 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
             scheduleError = error.message;
         }
     } else {
-        scheduleError = "Resolve the preceding readiness checks to validate future time slots.";
+        scheduleError = "Connect a Facebook Page, add a valid link, and set a valid campaign date range.";
     }
     check("Future publishing slots", Boolean(schedulePreview), scheduleError ||
         `${schedulePreview?.postCount || 0} post(s) fit the selected dates and Page limits.`);
@@ -433,16 +454,36 @@ router.post("/:id/activate", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    const previous = { ...campaign };
+    try {
+        const scheduleCampaign = getScheduleCampaign(campaign, req.workspaceScopeId);
+        const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
+        const publishingSettings = validatePublishingSettings(
+            usesDefaultPublishingSettings
+                ? defaultPublishingSettings(campaign, campaign.pages || [])
+                : campaign.publishingSettings,
+            campaign.pages || [],
+            campaign.timezone
+        );
+        Object.assign(campaign, {
+            imageIds: scheduleCampaign.imageIds,
+            resourceAssignments: scheduleCampaign.resourceAssignments,
+            matchingHistory: scheduleCampaign.matchingHistory,
+            publishingSettings
+        });
+    } catch (error) {
+        return res.status(409).json({ error: error.message || "Campaign resources could not be prepared for activation." });
+    }
     const readiness = getActivationReadiness(campaign, req.workspaceScopeId);
     if (!readiness.ready) {
+        Object.assign(campaign, previous);
         return res.status(409).json({
             error: "Complete every campaign readiness check before activation.",
             readiness
         });
     }
 
-    const previous = { ...campaign };
-    if (campaign.publishingSettings.automaticApproval) {
+    if (campaign.publishingSettings.automaticApproval && Array.isArray(campaign.aiContent)) {
         campaign.aiContent = campaign.aiContent.map(content =>
             content.status === "approved" ? content : { ...content, status: "approved" }
         );
@@ -572,14 +613,10 @@ router.patch("/:id", (req, res) => {
             throw new Error("Save the changed Pages, URLs, or images and rebuild the matching plan before changing later-step settings.");
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "aiSettings")) {
-            if (!campaign.resourceAssignments?.length) throw new Error("Build a matching plan before saving AI settings.");
             updates.aiSettings = aiContent.validateSettings(req.body.aiSettings);
             nextStep = Math.max(nextStep, 7);
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "publishingSettings")) {
-            if (!campaign.resourceAssignments?.length || !(updates.aiSettings || campaign.aiSettings)) {
-                throw new Error("Build a matching plan and save AI settings before configuring publishing.");
-            }
             updates.publishingSettings = validatePublishingSettings(
                 req.body.publishingSettings,
                 updates.pages || campaign.pages || [],
@@ -595,9 +632,6 @@ router.patch("/:id", (req, res) => {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "currentStep")) {
             const step = Number(req.body.currentStep);
             if (!Number.isInteger(step) || step < 3 || step > 8) throw new Error("Campaign workflow step is invalid.");
-            if (step >= 6 && !campaign.resourceAssignments?.length) throw new Error("Build a matching plan before continuing to Step 6.");
-            if (step >= 7 && !(updates.aiSettings || campaign.aiSettings)) throw new Error("Save AI settings before continuing to Step 7.");
-            if (step >= 8 && !(updates.publishingSettings || campaign.publishingSettings)) throw new Error("Save publishing settings before continuing to Step 8.");
             nextStep = Math.max(nextStep, step);
         }
         if (invalidatesPlan) {

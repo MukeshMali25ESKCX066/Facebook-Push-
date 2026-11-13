@@ -1,6 +1,7 @@
 (function () {
   const root = document.getElementById("advanced-hybrid-app");
   const moduleNav = document.querySelector(".ah-module-nav");
+  const aiGenerationTasks = new Map();
   const state = {
     campaigns: [],
     currentView: "overview",
@@ -20,11 +21,9 @@
     discoverySearch: "",
     discoveryWarnings: [],
     discoveryTruncated: false,
-    aiRoundIndex: 0,
     aiSettingsDraft: null,
     publishingSettingsDraft: null,
-    isGeneratingAllRounds: false,
-    isGeneratingRound: false,
+    isGeneratingCaptions: false,
     activationReadiness: null,
     readinessError: "",
     schedule: null,
@@ -76,10 +75,10 @@
       "create-campaign": "Step 2 · Create Campaign",
       "facebook-pages": "Step 3 · Select Facebook Pages",
       "url-library": "Step 4 · Add Article URLs",
-      "image-library": "Step 5 · Upload Images",
-      "smart-matching": "Step 6 · Smart URL & Image Matching",
-      "ai-settings": "Step 7 · AI Content Settings",
-      "publishing-settings": "Step 8 · Auto Publishing",
+      "image-library": "Step 5 · Optional Images",
+      "smart-matching": "Step 6 · Optional Resource Preview",
+      "ai-settings": "Step 7 · Optional AI Captions",
+      "publishing-settings": "Step 8 · Optional Schedule Settings",
       "campaign-review": "Step 9 · Review & Activate",
       "auto-publishing": "Step 10 · Automatic Processing",
       "publishing-queue": "Step 10 · Publishing Queue",
@@ -170,7 +169,7 @@
       <div class="ah-error" id="ah-form-error" role="alert" hidden></div>
       <section class="ah-panel ah-form-panel">
         <div class="ah-panel-heading">
-          <div><p class="ah-kicker">Step 1 · Campaign setup</p><h2>Create New Campaign</h2><p>Set the campaign brief and publishing date range.</p></div>
+        <div><p class="ah-kicker">Step 1 · Campaign setup</p><h2>Create New Campaign</h2><p>Only a campaign name is required. Dates and publishing settings can use safe defaults.</p></div>
         </div>
         <form id="ah-campaign-form">
           <div class="ah-form-grid">
@@ -178,14 +177,14 @@
               <input name="campaignName" maxlength="120" placeholder="e.g. Rajasthan Events 2026" required>
             </label>
             <label class="ah-field">Campaign Type
-              <select name="campaignType" required>
+              <select name="campaignType">
                 <option value="Event">Event</option>
                 <option value="Article">Article</option>
                 <option value="Traffic">Traffic</option>
               </select>
             </label>
             <label class="ah-field">Timezone
-              <select name="timezone" required>
+              <select name="timezone">
                 <option value="Asia/Kolkata" selected>Asia/Kolkata</option>
                 <option value="UTC">UTC</option>
                 <option value="America/New_York">America/New_York</option>
@@ -195,10 +194,10 @@
               </select>
             </label>
             <label class="ah-field">Start Date
-              <input type="date" name="startDate" required>
+              <input type="date" name="startDate">
             </label>
             <label class="ah-field">End Date
-              <input type="date" name="endDate" required>
+              <input type="date" name="endDate">
             </label>
             <label class="ah-field ah-field-full">Description
               <textarea name="description" maxlength="2000" placeholder="e.g. Website traffic campaign"></textarea>
@@ -367,7 +366,7 @@
           <p class="ah-help-text">Paste multiple URLs one per line. Files may contain one URL column; up to 200 URLs and 3 MB per upload.</p>
         </section>
         <div class="ah-article-list">${articleRows || `<div class="ah-empty">No article URLs added yet.</div>`}</div>
-        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Article List</button><button type="button" class="ah-button" data-ah-action="save-articles-and-images">Continue to Upload Images</button></div></div>
+        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected · images and AI are optional</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Article List</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles-and-images">Continue to Images</button><button type="button" class="ah-button" data-ah-action="save-articles-and-activate">Save Link &amp; Activate</button></div></div>
       </section>`;
     const discoverySearch = root.querySelector("#ah-discovery-search");
     if (discoverySearch) {
@@ -458,7 +457,7 @@
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 5 · Upload Images</p><h2>Campaign image library</h2><p>Upload individual images, select several, add a whole folder, or import a ZIP archive.</p></div></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 5 · Optional images</p><h2>Campaign image library</h2><p>Images are optional. Upload individual images, a folder, or a ZIP if you want image posts instead of link-only posts.</p></div></div>
         <section class="ah-import-card">
           <div class="ah-media-upload-grid">
             <label class="ah-field">Category for new uploads<input id="ah-image-category" type="text" maxlength="60" placeholder="e.g. Diwali"></label>
@@ -480,7 +479,7 @@
           ${imageCards ? `<div class="ah-image-library-grid">${imageCards}</div>` : ""}
           <div class="ah-empty" data-image-empty ${hasVisibleImages ? "hidden" : ""}>${search ? "No images match this search." : state.imageFolder ? "This folder has no images." : state.imageAssets.length ? "No images in the root folder." : "No images uploaded yet. Select images, a folder, or a ZIP archive to get started."}</div>
         </div>
-        <div class="ah-workflow-footer"><span id="ah-image-selection-count">${selectedIds.size} image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection">Save selected images</button><button type="button" class="ah-button" data-ah-action="save-image-selection-and-match">Save images &amp; continue to matching →</button></div></div>
+        <div class="ah-workflow-footer"><span id="ah-image-selection-count">${selectedIds.size} optional image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection">Save selected images</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection-and-match">Save &amp; preview assignments</button><button type="button" class="ah-button" data-ah-action="save-image-selection-and-activate">Save &amp; Activate</button></div></div>
       </section>`;
   }
 
@@ -494,36 +493,31 @@
     const pageCount = (campaign.pages || []).length;
     const imageCount = (campaign.imageIds || []).length;
     const articleCount = (campaign.articleUrls || []).length;
-    const canMatch = pageCount > 0 && articleCount >= pageCount && imageCount >= pageCount;
-    const roundRows = rounds.map(round => `
-      <details class="ah-matching-round" ${round.roundIndex === 0 ? "open" : ""}>
-        <summary>Round ${round.roundIndex + 1} · ${round.assignments.length} Pages</summary>
-        <div class="ah-matching-table">
-          ${round.assignments.map(assignment => {
-            const image = state.imageAssets.find(item => item.id === assignment.imageId);
-            return `<article class="ah-match-row">
-              <strong>${escapeHtml(assignment.pageName)}</strong>
-              <a href="${escapeHtml(assignment.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(assignment.articleTitle || assignment.articleUrl)}</a>
-              <span>${escapeHtml(assignment.imageName)}${assignment.folderPath ? ` · ${escapeHtml(assignment.folderPath)}` : ""}</span>
-              ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(assignment.imageName)}" loading="lazy">` : ""}
-            </article>`;
-          }).join("")}
-        </div>
-      </details>`).join("");
+    const canMatch = pageCount > 0 && articleCount > 0;
+    const assignments = rounds.flatMap(round => round.assignments || []);
+    const assignmentRows = assignments.map(assignment => {
+      const image = state.imageAssets.find(item => item.id === assignment.imageId);
+      return `<article class="ah-match-row">
+        <strong>${escapeHtml(assignment.pageName)}</strong>
+        <a href="${escapeHtml(assignment.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(assignment.articleTitle || assignment.articleUrl)}</a>
+        <span>${escapeHtml(assignment.imageName || "No image")}${assignment.folderPath ? ` · ${escapeHtml(assignment.folderPath)}` : ""}</span>
+        ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(assignment.imageName)}" loading="lazy">` : ""}
+      </article>`;
+    }).join("");
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 6 · Smart URL &amp; Image Matching</p><h2>Assign unique resources to each Page</h2><p>Every selected URL and image is covered. Each Page receives a different URL and image in a round; resources repeat only after they are exhausted.</p></div></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 6 · Optional resource preview</p><h2>Preview Page and link assignments</h2><p>Optional: matching is automatic when the campaign starts. Images are never required and one link can be used across Pages.</p></div></div>
         <div class="ah-matching-summary">
           <article><strong>${pageCount}</strong><span>Pages</span></article>
           <article><strong>${articleCount}</strong><span>Selected URLs</span></article>
           <article><strong>${imageCount}</strong><span>Selected images</span></article>
-          <article><strong>${rounds.length}</strong><span>Rounds</span></article>
+          <article><strong>${assignments.length}</strong><span>Preview posts</span></article>
         </div>
-        ${!canMatch ? `<div class="ah-inline-warning">Select at least one authorized Page and at least ${pageCount || 1} article URLs and ${pageCount || 1} images to build one complete unique round.</div>` : ""}
-        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="build-matching-plan" ${canMatch ? "" : "disabled"}>${rounds.length ? "Rebuild matching plan" : "Build matching plan"}</button>${rounds.length ? `<button type="button" class="ah-button" data-ah-action="continue-ai-settings">Continue to AI Settings →</button>` : ""}</div>
-        ${rounds.length ? `<div class="ah-matching-rounds">${roundRows}</div>` : `<div class="ah-empty">Build a matching plan to preview the Page, URL, and image assignments.</div>`}
+        ${!canMatch ? `<div class="ah-inline-warning">Choose at least one authorized Page and add one article URL. Images are optional.</div>` : ""}
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="build-matching-plan" ${canMatch ? "" : "disabled"}>${rounds.length ? "Refresh optional preview" : "Build optional preview"}</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-ai-settings">Optional AI captions →</button><button type="button" class="ah-button" data-ah-action="continue-campaign-review">Skip to Review &amp; Activate</button></div>
+        ${assignments.length ? `<div class="ah-matching-table">${assignmentRows}</div>` : `<div class="ah-empty">You can skip this preview; the campaign will assign links automatically when activated.</div>`}
       </section>`;
   }
 
@@ -549,18 +543,13 @@
     };
     const rounds = campaign.resourceAssignments || [];
     const generated = campaign.aiContent || [];
-    const generationBusy = state.isGeneratingAllRounds || state.isGeneratingRound;
-    const completeRoundIndexes = new Set(rounds.filter(round =>
-      generated.filter(item => item.roundIndex === round.roundIndex).length === round.assignments.length
-    ).map(round => round.roundIndex));
-    const roundsRemaining = rounds.length - completeRoundIndexes.size;
-    if (!rounds.some(round => round.roundIndex === state.aiRoundIndex)) {
-      state.aiRoundIndex = rounds.find(round => !generatedRounds.has(round.roundIndex))?.roundIndex ?? rounds[0]?.roundIndex ?? 0;
-    }
-    const selectedRound = rounds.find(round => round.roundIndex === state.aiRoundIndex);
-    const roundContent = generated.filter(item => item.roundIndex === state.aiRoundIndex);
-    const approvedInRound = roundContent.some(item => item.status === "approved");
-    const contentCards = roundContent.map(post => {
+    const generationBusy = state.isGeneratingCaptions;
+    const assignments = rounds.flatMap(round => round.assignments || []);
+    const generatedKeys = new Set(generated.map(item => `${item.roundIndex}:${item.pageId}`));
+    const captionsMissing = assignments.length - assignments.filter(assignment =>
+      generatedKeys.has(`${assignment.roundIndex}:${assignment.pageId}`)
+    ).length;
+    const contentCards = generated.map(post => {
       const image = state.imageAssets.find(item => item.id === post.imageId);
       return `<article class="ah-generated-post">
         <div class="ah-generated-post-heading"><strong>${escapeHtml(post.pageName)}</strong><span class="ah-status ${post.status === "approved" ? "ah-status-ready" : ""}">${escapeHtml(post.status)}</span></div>
@@ -576,8 +565,7 @@
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 7 · AI Content Settings</p><h2>Configure captions for each Page</h2><p>Save settings or explicitly generate one round or every missing round. Continuing does not use AI.</p></div></div>
-        ${rounds.length ? "" : `<div class="ah-inline-warning">Build the Step 6 matching plan before configuring AI content.</div>`}
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 7 · Optional AI captions</p><h2>Generate captions in one pass</h2><p>This section is optional. Saving AI settings generates all missing captions once; you can also skip it and publish direct article links.</p></div></div>
         <form id="ah-ai-settings-form">
           <div class="ah-form-grid">
             <label class="ah-field">Caption language<input name="language" maxlength="40" value="${escapeHtml(settings.language)}" required></label>
@@ -589,26 +577,20 @@
             <label class="ah-check-field"><input type="checkbox" name="hashtags" ${settings.hashtags !== false ? "checked" : ""}>Generate hashtags</label>
             <label class="ah-check-field"><input type="checkbox" name="emoji" ${settings.emoji !== false ? "checked" : ""}>Allow emojis</label>
             <label class="ah-check-field"><input type="checkbox" name="perPageVariation" ${settings.perPageVariation !== false ? "checked" : ""}>Create a distinct caption for each Page</label>
-            <label class="ah-check-field"><input type="checkbox" name="detectDuplicates" ${settings.detectDuplicates !== false ? "checked" : ""}>Detect duplicate captions across Pages and rounds</label>
+            <label class="ah-check-field"><input type="checkbox" name="detectDuplicates" ${settings.detectDuplicates !== false ? "checked" : ""}>Detect duplicate captions across Pages</label>
           </div>
-          <div class="ah-form-footer"><span>AI runs only when you press a generation button.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${rounds.length && !generationBusy ? "" : "disabled"}>Save AI settings &amp; Continue →</button></div></div>
+          <div class="ah-form-footer"><span>AI is never required to activate a campaign.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${generationBusy ? "disabled" : ""}>Save AI settings${rounds.length ? " &amp; Generate Captions" : ""} →</button></div></div>
         </form>
         ${rounds.length ? `
           <section class="ah-ai-generation">
-            <div class="ah-panel-heading"><div><h3>Generate and review captions</h3><p>Choose a matching round. Each generation uses one post per selected Page.</p></div></div>
-            <div class="ah-page-toolbar"><label class="ah-field">Matching round<select id="ah-ai-round" ${generationBusy ? "disabled" : ""}>${rounds.map(round => `<option value="${round.roundIndex}" ${state.aiRoundIndex === round.roundIndex ? "selected" : ""}>Round ${round.roundIndex + 1}${completeRoundIndexes.has(round.roundIndex) ? " · generated" : ""}</option>`).join("")}</select></label><button type="button" class="ah-button ah-button-secondary" data-ah-action="generate-ai-round" ${generationBusy || approvedInRound || !selectedRound ? "disabled" : ""}>${generationBusy ? "Generating…" : roundContent.length ? "Regenerate this round" : "Generate captions for this round"}</button><button type="button" class="ah-button" data-ah-action="generate-all-ai-rounds" ${generationBusy || !roundsRemaining ? "disabled" : ""}>${state.isGeneratingAllRounds ? "Generating rounds…" : `Generate all missing rounds (${roundsRemaining})`}</button></div>
-            ${approvedInRound ? `<div class="ah-help-text">This round contains approved posts and cannot be regenerated. Return them to draft first.</div>` : ""}
-            ${contentCards ? `<div class="ah-generated-post-grid">${contentCards}</div>` : `<div class="ah-empty">No captions generated for this round. Choose settings above, then press Generate.</div>`}
+            <div class="ah-panel-heading"><div><h3>Campaign captions</h3><p>Generate all missing captions together. Completed content is kept and is not generated again.</p></div><button type="button" class="ah-button" data-ah-action="generate-campaign-captions" ${generationBusy || !captionsMissing ? "disabled" : ""}>${generationBusy ? "Generating captions…" : `Generate missing captions (${captionsMissing})`}</button></div>
+            ${contentCards ? `<div class="ah-generated-post-grid">${contentCards}</div>` : `<div class="ah-empty">No captions generated. Saving settings will generate the campaign captions; or skip this section.</div>`}
           </section>` : ""}
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Skip AI and Review &amp; Activate →</button></div>
       </section>`;
     const form = root.querySelector("#ah-ai-settings-form");
     form.addEventListener("input", () => { state.aiSettingsDraft = collectAiSettings(form); });
     form.addEventListener("change", () => { state.aiSettingsDraft = collectAiSettings(form); });
-    root.querySelector("#ah-ai-round")?.addEventListener("change", event => {
-      state.aiSettingsDraft = collectAiSettings(form);
-      state.aiRoundIndex = Number(event.target.value);
-      renderAiSettings();
-    });
   }
 
   function defaultPublishingSettings(campaign) {
@@ -618,15 +600,15 @@
       scheduleDays[day] = { enabled, times: [] };
     }
     return {
-      enabled: false,
-      automaticApproval: false,
+      enabled: true,
+      automaticApproval: true,
       roundRobin: true,
       repeatResources: true,
       timezone: campaign.timezone || "Asia/Kolkata",
-      allowedHours: { start: "09:00", end: "21:00" },
+      allowedHours: { start: "09:00", end: "10:00" },
       weekendPublishing: false,
       scheduleDays,
-      pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 120, dailyPostLimit: 20 }])),
+      pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 60, dailyPostLimit: 1 }])),
       retryAttempts: 3,
       retryDelayMinutes: 5
     };
@@ -639,7 +621,6 @@
       return;
     }
     const settings = state.publishingSettingsDraft || campaign.publishingSettings || defaultPublishingSettings(campaign);
-    const canConfigure = Boolean(campaign.resourceAssignments?.length && campaign.aiSettings);
     const dayCards = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(day => {
       const daySettings = settings.scheduleDays?.[day] || { enabled: false, times: [] };
       return `<article class="ah-day-card">
@@ -647,7 +628,7 @@
       </article>`;
     }).join("");
     const pageRows = (campaign.pages || []).map(page => {
-      const config = settings.pageSettings?.[page.id] || { intervalMinutes: 120, dailyPostLimit: 20 };
+      const config = settings.pageSettings?.[page.id] || { intervalMinutes: 60, dailyPostLimit: 1 };
       return `<div class="ah-page-setting-row">
         <strong>${escapeHtml(page.name)}</strong>
         <label>Interval (minutes)<input type="number" min="1" max="1440" step="1" data-page-interval="${escapeHtml(page.id)}" value="${escapeHtml(config.intervalMinutes)}"></label>
@@ -656,21 +637,21 @@
     }).join("");
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
-      ${!canConfigure ? `<div class="ah-inline-warning">Complete Smart Matching and save AI settings before configuring Auto Publishing.</div>` : ""}
+      <div class="ah-inline-note">Optional: if you skip this section, the campaign uses weekday publishing, a two-hour interval, and safe default limits.</div>
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Auto Publishing Configuration</p><h2>Set a safe publishing schedule</h2><p>These settings are saved as a draft configuration. Saving does not start a publishing job.</p></div></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Optional Schedule Settings</p><h2>Customize the publishing schedule</h2><p>If skipped, one post per Page publishes each weekday at 09:00. Saving does not start a publishing job.</p></div></div>
         <form id="ah-publishing-settings-form">
           <div class="ah-check-grid">
             <label class="ah-check-field"><input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>Enable auto publishing when campaign is explicitly started</label>
             <label class="ah-check-field"><input type="checkbox" name="automaticApproval" ${settings.automaticApproval ? "checked" : ""}>Automatically approve generated posts</label>
-            <label class="ah-check-field"><input type="checkbox" name="roundRobin" ${settings.roundRobin !== false ? "checked" : ""}>Round-robin Page selection</label>
-            <label class="ah-check-field"><input type="checkbox" name="repeatResources" ${settings.repeatResources !== false ? "checked" : ""}>Repeat selected URLs and images after the first pass</label>
+            <label class="ah-check-field"><input type="checkbox" name="roundRobin" ${settings.roundRobin !== false ? "checked" : ""}>Rotate Pages in the queue</label>
+            <label class="ah-check-field"><input type="checkbox" name="repeatResources" ${settings.repeatResources !== false ? "checked" : ""}>Cycle through selected links and images</label>
             <label class="ah-check-field"><input type="checkbox" name="weekendPublishing" ${settings.weekendPublishing ? "checked" : ""}>Allow weekend publishing</label>
           </div>
           <div class="ah-form-grid">
             <label class="ah-field">Timezone<input name="timezone" maxlength="100" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Kolkata" required></label>
             <label class="ah-field">Daily starting time<input type="time" name="allowedStart" value="${escapeHtml(settings.allowedHours?.start || "09:00")}" required></label>
-            <label class="ah-field">Daily stop time<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "21:00")}" required></label>
+            <label class="ah-field">Daily stop time<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "10:00")}" required></label>
             <label class="ah-field">Retries after first attempt<select name="retryAttempts">${[0, 1, 2, 3, 4, 5].map(value => `<option value="${value}" ${Number(settings.retryAttempts) === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
             <label class="ah-field">Retry delay (minutes)<input type="number" name="retryDelayMinutes" min="1" max="1440" value="${escapeHtml(settings.retryDelayMinutes || 5)}" required></label>
           </div>
@@ -682,7 +663,7 @@
             <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>Posts repeat at the selected interval until the daily stop time or daily limit.</p></div></div>
             ${pageRows || `<div class="ah-empty">Select Facebook Pages before setting Page-specific limits.</div>`}
           </section>
-          <div class="ah-form-footer"><span>Auto publishing starts only after a separate campaign-start action.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${canConfigure ? "" : "disabled"}>Save publishing settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Review &amp; Activate →</button></div></div>
+          <div class="ah-form-footer"><span>Auto publishing starts only after a separate campaign-start action.</span><div class="ah-form-actions"><button type="submit" class="ah-button">Save publishing settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Skip to Review &amp; Activate →</button></div></div>
         </form>
       </section>`;
     const form = root.querySelector("#ah-publishing-settings-form");
@@ -710,7 +691,7 @@
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.campaigns.length > 1 ? `<label class="ah-review-campaign-picker">Campaign to review<select id="ah-review-campaign">${state.campaigns.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === campaign.id ? "selected" : ""}>${escapeHtml(item.campaignName)} · ${escapeHtml(item.status)}</option>`).join("")}</select></label>` : ""}
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 9 · Campaign Review &amp; Activate</p><h2>Review ${escapeHtml(campaign.campaignName)}</h2><p>Activation queues approved posts in the durable scheduler. Posts publish to Facebook only at the displayed future times.</p></div><span class="ah-status ${readiness?.ready ? "ah-status-ready" : ""}">${readiness?.ready ? "Ready" : escapeHtml(campaign.status)}</span></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 9 · Campaign Review &amp; Activate</p><h2>Review ${escapeHtml(campaign.campaignName)}</h2><p>Only an authorized Page and article link are required. Images, AI captions, matching previews, and custom schedule settings are optional.</p></div><span class="ah-status ${readiness?.ready ? "ah-status-ready" : ""}">${readiness?.ready ? "Ready" : escapeHtml(campaign.status)}</span></div>
         <div class="ah-readiness-list">${checks.length ? checks.map(item => `<article class="ah-readiness-row ${item.ready ? "ready" : "blocked"}"><span aria-hidden="true">${item.ready ? "✓" : "!"}</span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.message)}</p></div></article>`).join("") : `<div class="ah-empty">${state.readinessError ? "Readiness checks could not be loaded." : "Loading campaign checks…"}</div>`}</div>
         ${readiness?.schedulePreview ? `<div class="ah-inline-note">${readiness.schedulePreview.postCount} post(s) fit the selected dates and limits. Next scheduled post: ${escapeHtml(formatScheduledTime(readiness.schedulePreview.nextPostAt, campaign.publishingSettings?.timezone || campaign.timezone))}.</div>` : ""}
         <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="refresh-readiness">Run checks again</button><button type="button" class="ah-button" data-ah-action="activate-campaign" ${readiness?.ready ? "" : "disabled"}>Activate Campaign</button></div>
@@ -844,7 +825,7 @@
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 14 · Campaign Management</p><h2>Manage campaign settings and resources</h2><p>Pause or stop the live queue before changing Pages, URLs, images, AI content, or publishing rules.</p></div></div>
         <div class="ah-form-actions">${campaignControlButtons(campaign)}${campaign.status === "stopped" || campaign.status === "draft" ? `<button type="button" class="ah-button" data-ah-action="edit-campaign-step" data-view="facebook-pages">Manage Pages</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="edit-campaign-step" data-view="url-library">Add article URLs</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="edit-campaign-step" data-view="image-library">Add images</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="edit-campaign-step" data-view="publishing-settings">Change publishing settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="edit-campaign-step" data-view="campaign-review">Review and activate</button>` : ""}</div>
         ${campaign.status === "paused" ? `<div class="ah-inline-warning">Stop the paused schedule before editing campaign resources or publishing settings. Stopping cancels remaining queued posts; a new activation creates a replacement schedule.</div>` : ""}
-        ${campaign.status === "stopped" ? `<div class="ah-inline-note">After changing resources or settings, rebuild the matching plan if needed, generate and approve captions, then run Step 9 readiness checks to create a replacement schedule.</div>` : ""}
+        ${campaign.status === "stopped" ? `<div class="ah-inline-note">After changing Pages, links, or settings, review and activate to create a replacement schedule. Images and AI captions are optional.</div>` : ""}
       </section>` : ""}`;
   }
 
@@ -905,7 +886,7 @@
       Object.assign(campaign, result.campaign);
       state.schedule = result.schedule;
       state.activationReadiness = result.readiness;
-      state.workflowMessage = "Campaign activated. Approved posts are now in the publishing queue.";
+      state.workflowMessage = "Campaign activated. Article links are queued; optional captions and images were used when available.";
       showView("auto-publishing");
       void loadOperations();
     } catch (error) {
@@ -920,7 +901,7 @@
     state.activeCampaignId = campaignId;
     state.activationReadiness = null;
     state.readinessError = "";
-    state.workflowMessage = "";
+    state.workflowMessage = "Activating with selected Pages and article links. Optional images, captions, and schedule settings are skipped.";
     setActiveModule("campaign-review");
     renderCampaignReview();
     if (button) {
@@ -998,8 +979,8 @@
     const pageSettings = {};
     for (const page of getActiveCampaign()?.pages || []) {
       pageSettings[page.id] = {
-        intervalMinutes: Number(form.querySelector(`[data-page-interval="${CSS.escape(page.id)}"]`)?.value || 120),
-        dailyPostLimit: Number(form.querySelector(`[data-page-limit="${CSS.escape(page.id)}"]`)?.value || 4)
+        intervalMinutes: Number(form.querySelector(`[data-page-interval="${CSS.escape(page.id)}"]`)?.value || 60),
+        dailyPostLimit: Number(form.querySelector(`[data-page-limit="${CSS.escape(page.id)}"]`)?.value || 1)
       };
     }
     return {
@@ -1152,11 +1133,13 @@
     }
   }
 
-  async function saveArticleUrls(nextView = "") {
+  async function saveArticleUrls(nextView = "", activateAfterSave = false) {
     const campaign = getActiveCampaign();
-    const button = root.querySelector(nextView
-      ? '[data-ah-action="save-articles-and-images"]'
-      : '[data-ah-action="save-articles"]');
+    const button = root.querySelector(activateAfterSave
+      ? '[data-ah-action="save-articles-and-activate"]'
+      : nextView
+        ? '[data-ah-action="save-articles-and-images"]'
+        : '[data-ah-action="save-articles"]');
     button.disabled = true;
     let saved = false;
     try {
@@ -1172,6 +1155,10 @@
     }
     if (saved && nextView) {
       showView(nextView, "Article list saved. Continue with campaign images.");
+      return;
+    }
+    if (saved && activateAfterSave) {
+      await directActivateCampaign(campaign.id);
       return;
     }
     if (state.currentView === "url-library" && state.activeCampaignId === campaign.id) renderUrlLibrary();
@@ -1379,7 +1366,12 @@
   async function saveImageSelection(nextView = "") {
     const campaign = getActiveCampaign();
     const imageIds = [...state.imageSelection];
-    const button = root.querySelector(`[data-ah-action="${nextView ? "save-image-selection-and-match" : "save-image-selection"}"]`);
+    const action = nextView === "campaign-review"
+      ? "save-image-selection-and-activate"
+      : nextView
+        ? "save-image-selection-and-match"
+        : "save-image-selection";
+    const button = root.querySelector(`[data-ah-action="${action}"]`);
     if (button) button.disabled = true;
     try {
       const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
@@ -1392,7 +1384,11 @@
       if (nextView) {
         state.imageFolder = "";
         state.imageSearch = "";
-        showView(nextView, "Images saved. Build a unique URL and image matching plan.");
+        if (nextView === "campaign-review") {
+          await directActivateCampaign(campaign.id);
+          return;
+        }
+        showView(nextView, "Images saved. Resource matching is optional.");
         return;
       }
     } catch (error) {
@@ -1405,14 +1401,14 @@
     const campaign = getActiveCampaign();
     const button = root.querySelector('[data-ah-action="build-matching-plan"]');
     if (button) button.disabled = true;
-    state.workflowMessage = "Building unique Page, URL, and image assignments…";
+    state.workflowMessage = "Building the optional Page and link preview…";
     try {
       const result = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/match-resources`, {
         method: "POST",
         body: JSON.stringify({})
       });
       Object.assign(campaign, result.campaign);
-      state.workflowMessage = `${result.resourceCoverage.roundCount} matching round${result.resourceCoverage.roundCount === 1 ? "" : "s"} created. Every selected URL and image is included.`;
+      state.workflowMessage = `Preview ready for ${result.resourceCoverage.pageCount} Page(s) and ${result.resourceCoverage.articleCount} link(s). Images are optional.`;
     } catch (error) {
       state.workflowMessage = error.message;
     }
@@ -1427,13 +1423,28 @@
     const aiSettings = collectAiSettings(form);
     if (button) button.disabled = true;
     try {
+      if (!(campaign.resourceAssignments || []).length &&
+          (campaign.pages || []).length && (campaign.articleUrls || []).length) {
+        const matched = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/match-resources`, {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        Object.assign(campaign, matched.campaign);
+      }
       const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
         method: "PATCH",
         body: JSON.stringify({ aiSettings, currentStep: 7 })
       });
       Object.assign(campaign, updated);
       state.aiSettingsDraft = null;
-      state.workflowMessage = "AI settings saved. Caption generation remains manual.";
+      if (!(campaign.resourceAssignments || []).length) {
+        state.workflowMessage = "AI settings saved. Add a Page and article link to generate captions, or skip AI and activate with a link.";
+        showView("publishing-settings");
+        return;
+      }
+      state.workflowMessage = "AI settings saved. Generating all missing campaign captions…";
+      const generated = await generateAllCampaignCaptions(aiSettings, campaign, false);
+      if (!generated) return;
       showView("publishing-settings");
     } catch (error) {
       state.aiSettingsDraft = aiSettings;
@@ -1442,86 +1453,110 @@
     }
   }
 
-  async function generateAiRound() {
-    const campaign = getActiveCampaign();
-    const form = root.querySelector("#ah-ai-settings-form");
-    if (!campaign || !form || state.isGeneratingRound || state.isGeneratingAllRounds) return;
-    const roundIndex = Number(root.querySelector("#ah-ai-round").value);
-    const settings = collectAiSettings(form);
-    state.isGeneratingRound = true;
-    state.aiSettingsDraft = settings;
-    state.workflowMessage = "Generating captions for this round. This may take a little while…";
-    renderAiSettings();
-    try {
-      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/generate`, {
-        method: "POST",
-        body: JSON.stringify({ roundIndex, settings })
-      });
-      Object.assign(campaign, updated);
-      state.aiSettingsDraft = null;
-      state.workflowMessage = `Captions generated for round ${roundIndex + 1}. Review and approve posts below.`;
-    } catch (error) {
-      state.aiSettingsDraft = settings;
-      state.workflowMessage = error.message;
-    } finally {
-      state.isGeneratingRound = false;
-      if (state.currentView === "ai-settings") renderAiSettings();
-    }
+  function renderAiGenerationProgress() {
+    if (state.currentView === "ai-settings") renderAiSettings();
+    else if (state.currentView === "campaign-review") renderCampaignReview();
   }
 
-  async function generateAllAiRounds() {
-    const campaign = getActiveCampaign();
-    const form = root.querySelector("#ah-ai-settings-form");
-    if (!campaign || !form || state.isGeneratingAllRounds || state.isGeneratingRound) return;
-    const settings = collectAiSettings(form);
-    state.isGeneratingAllRounds = true;
-    state.aiSettingsDraft = settings;
-    state.workflowMessage = "Saving AI settings before generating the missing rounds.";
-    renderAiSettings();
-    let activeRound = null;
-    let generatedCount = 0;
-    try {
-      const saved = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ aiSettings: settings, currentStep: 7 })
-      });
-      Object.assign(campaign, saved);
-      state.aiSettingsDraft = null;
-
-      for (const round of campaign.resourceAssignments || []) {
-        const existingCount = (campaign.aiContent || [])
-          .filter(post => post.roundIndex === round.roundIndex).length;
-        if (existingCount === round.assignments.length) continue;
-
-        activeRound = round.roundIndex;
-        state.workflowMessage = `Generating round ${round.roundIndex + 1} of ${campaign.resourceAssignments.length}…`;
-        renderAiSettings();
-        const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/generate`, {
-          method: "POST",
-          body: JSON.stringify({ roundIndex: round.roundIndex, settings })
-        });
-        Object.assign(campaign, updated);
-        generatedCount += 1;
-        state.workflowMessage = `Generated round ${round.roundIndex + 1} of ${campaign.resourceAssignments.length}.`;
-        renderAiSettings();
-      }
-
-      const total = (campaign.resourceAssignments || []).length;
-      state.workflowMessage = generatedCount
-        ? `Generated ${generatedCount} round${generatedCount === 1 ? "" : "s"}. All ${total} round${total === 1 ? "" : "s"} now have captions to review.`
-        : "Every matching round already has generated captions.";
-    } catch (error) {
-      const completedRounds = (campaign.resourceAssignments || []).filter(round =>
-        (campaign.aiContent || []).filter(post => post.roundIndex === round.roundIndex).length === round.assignments.length
-      ).length;
-      state.workflowMessage = activeRound === null
-        ? `Could not save AI settings: ${error.message}`
-        : `Stopped at round ${activeRound + 1}: ${error.message} ${completedRounds} round${completedRounds === 1 ? " is" : "s are"} saved; press Generate all missing rounds to resume.`;
-      state.aiSettingsDraft = settings;
-    } finally {
-      state.isGeneratingAllRounds = false;
-      if (state.currentView === "ai-settings") renderAiSettings();
+  function generateAllCampaignCaptions(settingsOverride = null, campaignOverride = null, saveSettings = !settingsOverride) {
+    const campaign = campaignOverride || getActiveCampaign();
+    if (!campaign) return Promise.resolve(false);
+    const existingTask = aiGenerationTasks.get(campaign.id);
+    if (existingTask) return existingTask;
+    if (state.isGeneratingCaptions) {
+      state.workflowMessage = "Wait for the current caption generation to finish before continuing.";
+      renderAiGenerationProgress();
+      return Promise.resolve(false);
     }
+
+    const form = root.querySelector("#ah-ai-settings-form");
+    const settings = settingsOverride || (form ? collectAiSettings(form) : campaign.aiSettings);
+    if (!settings) {
+      state.workflowMessage = "Save AI settings before captions can be generated automatically.";
+      renderAiGenerationProgress();
+      return Promise.resolve(false);
+    }
+
+    const task = (async () => {
+      state.isGeneratingCaptions = true;
+      state.aiSettingsDraft = saveSettings ? settings : null;
+      state.workflowMessage = saveSettings
+        ? "Saving AI settings before generating captions for every matching post."
+        : "Automatically generating captions for every matching post.";
+      renderAiGenerationProgress();
+      let activeBatchIndex = null;
+      let generatedCount = 0;
+      let settingsSaved = !saveSettings;
+      try {
+        if (saveSettings) {
+          const saved = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ aiSettings: settings, currentStep: 7 })
+          });
+          Object.assign(campaign, saved);
+          state.aiSettingsDraft = null;
+          settingsSaved = true;
+        }
+
+        const rounds = campaign.resourceAssignments || [];
+        if (!rounds.length) throw new Error("Build a matching plan before generating captions.");
+        for (const round of rounds) {
+          const roundPosts = (campaign.aiContent || []).filter(post => post.roundIndex === round.roundIndex);
+          const postsByPage = new Map(roundPosts.map(post => [String(post.pageId), post]));
+          const complete = round.assignments.every(assignment => {
+            const post = postsByPage.get(String(assignment.pageId));
+            return post && String(post.caption || "").trim() &&
+              String(post.imageId || "") === String(assignment.imageId || "") &&
+              String(post.articleUrl || "") === String(assignment.articleUrl || "");
+          });
+          if (complete) continue;
+          if (roundPosts.some(post => post.status === "approved")) {
+            throw new Error("Some posts in this batch already have approved captions and cannot be regenerated automatically.");
+          }
+
+          activeBatchIndex = generatedCount;
+          state.workflowMessage = `Generating campaign captions (${generatedCount + 1} of ${rounds.length})…`;
+          renderAiGenerationProgress();
+          const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/generate`, {
+            method: "POST",
+            body: JSON.stringify({ roundIndex: round.roundIndex, settings })
+          });
+          Object.assign(campaign, updated);
+          generatedCount += 1;
+        }
+
+        state.workflowMessage = generatedCount
+          ? `Generated captions for ${generatedCount} missing group${generatedCount === 1 ? "" : "s"}. Captions are saved and will not be generated again unless you request it.`
+          : "All campaign posts already have generated captions.";
+        return true;
+      } catch (error) {
+        const completedRounds = (campaign.resourceAssignments || []).filter(round =>
+          round.assignments.every(assignment => {
+            const post = (campaign.aiContent || []).find(item =>
+              item.roundIndex === round.roundIndex && String(item.pageId) === String(assignment.pageId));
+            return post && String(post.caption || "").trim() &&
+              String(post.imageId || "") === String(assignment.imageId || "") &&
+              String(post.articleUrl || "") === String(assignment.articleUrl || "");
+          })
+        ).length;
+        state.workflowMessage = !settingsSaved
+          ? `Could not save AI settings: ${error.message}`
+          : activeBatchIndex === null
+            ? `Automatic caption generation failed: ${error.message}`
+            : `Caption generation paused: ${error.message} ${completedRounds} batch${completedRounds === 1 ? " is" : "es are"} saved; retry to generate only missing captions.`;
+        state.aiSettingsDraft = saveSettings ? settings : null;
+        return false;
+      } finally {
+        state.isGeneratingCaptions = false;
+        renderAiGenerationProgress();
+      }
+    })();
+
+    const trackedTask = task.finally(() => {
+      if (aiGenerationTasks.get(campaign.id) === trackedTask) aiGenerationTasks.delete(campaign.id);
+    });
+    aiGenerationTasks.set(campaign.id, trackedTask);
+    return trackedTask;
   }
 
   async function togglePostApproval(contentId, status) {
@@ -1743,6 +1778,8 @@
       void saveArticleUrls();
     } else if (action === "save-articles-and-images") {
       void saveArticleUrls("image-library");
+    } else if (action === "save-articles-and-activate") {
+      void saveArticleUrls("", true);
     } else if (action === "save-image-metadata") {
       void saveImageMetadata(control.dataset.imageId);
     } else if (action === "delete-image") {
@@ -1751,6 +1788,8 @@
       void saveImageSelection();
     } else if (action === "save-image-selection-and-match") {
       void saveImageSelection("smart-matching");
+    } else if (action === "save-image-selection-and-activate") {
+      void saveImageSelection("campaign-review");
     } else if (action === "open-image-folder") {
       state.imageFolder = control.dataset.folderPath || "";
       state.imageSearch = "";
@@ -1769,10 +1808,8 @@
       void buildMatchingPlan();
     } else if (action === "continue-ai-settings") {
       showView("ai-settings");
-    } else if (action === "generate-ai-round") {
-      void generateAiRound();
-    } else if (action === "generate-all-ai-rounds") {
-      void generateAllAiRounds();
+    } else if (action === "generate-campaign-captions") {
+      void generateAllCampaignCaptions();
     } else if (action === "toggle-post-approval") {
       void togglePostApproval(control.dataset.contentId, control.dataset.nextStatus);
     } else if (action === "refresh-readiness") {
