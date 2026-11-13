@@ -5,6 +5,14 @@
       "destination": "https://facebook-push.onrender.com/api/:path*"
     },
     {
+      "source": "/advanced-hybrid",
+      "destination": "/advanced-hybrid.html"
+    },
+    {
+      "source": "/advanced-hybrid/",
+      "destination": "/advanced-hybrid.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
