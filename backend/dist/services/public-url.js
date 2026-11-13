@@ -90,7 +90,14 @@ function requestPinned(url, address, options) {
             else resolve(result);
         };
         const lookup = (_hostname, lookupOptions, callback) => {
-            if (typeof lookupOptions === "function") callback = lookupOptions;
+            if (typeof lookupOptions === "function") {
+                callback = lookupOptions;
+                lookupOptions = {};
+            }
+            if (lookupOptions && lookupOptions.all) {
+                callback(null, [address]);
+                return;
+            }
             callback(null, address.address, address.family);
         };
         const request = transport.request(url, {
