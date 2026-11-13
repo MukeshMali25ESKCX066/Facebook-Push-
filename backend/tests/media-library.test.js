@@ -108,8 +108,9 @@ test("uploads, manages, previews, and tracks workspace image assets", async () =
     const upload = new FormData();
     upload.append("category", "Diwali");
     upload.append("tags", "festival, Hindi, festival");
-    upload.append("files", new Blob([png], { type: "image/png" }), "folder/diwali.png");
-    upload.append("files", new Blob(["skip"], { type: "text/plain" }), "folder/readme.txt");
+    upload.append("relativePaths", JSON.stringify(["folder/diwali.png", "folder/readme.txt"]));
+    upload.append("files", new Blob([png], { type: "image/png" }), "diwali.png");
+    upload.append("files", new Blob(["skip"], { type: "text/plain" }), "readme.txt");
     const uploadResponse = await fetch(`${baseUrl}/api/media-library/upload`, {
         method: "POST",
         headers,
@@ -121,6 +122,7 @@ test("uploads, manages, previews, and tracks workspace image assets", async () =
     assert.equal(uploaded.skipped, 1);
     const firstImage = uploaded.images[0];
     assert.equal(firstImage.originalName, "diwali.png");
+    assert.equal(firstImage.folderPath, "folder");
     assert.equal(firstImage.category, "Diwali");
     assert.deepEqual(firstImage.tags, ["festival", "Hindi"]);
     assert.equal(firstImage.width, 1);
@@ -145,7 +147,8 @@ test("uploads, manages, previews, and tracks workspace image assets", async () =
     assert.equal(zipResponse.status, 201);
     const zipped = await zipResponse.json();
     assert.equal(zipped.images.length, 1);
-    assert.equal(zipped.images[0].originalName, "festival/second.png");
+    assert.equal(zipped.images[0].originalName, "second.png");
+    assert.equal(zipped.images[0].folderPath, "festival");
     assert.equal(zipped.skipped, 1);
 
     const selected = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
@@ -181,7 +184,9 @@ test("uploads, manages, previews, and tracks workspace image assets", async () =
         body: replacement
     });
     assert.equal(replaceResponse.status, 200);
-    assert.equal((await replaceResponse.json()).originalName, "replacement.png");
+    const replaced = await replaceResponse.json();
+    assert.equal(replaced.originalName, "replacement.png");
+    assert.equal(replaced.folderPath, "folder");
 
     const unselect = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
         method: "PATCH",
@@ -227,4 +232,14 @@ test("rejects unsafe ZIP paths and malformed image data", async () => {
         body: invalidImage
     });
     assert.equal(invalidResponse.status, 400);
+
+    const unsafeRelativePath = new FormData();
+    unsafeRelativePath.append("relativePaths", JSON.stringify(["../escape.png"]));
+    unsafeRelativePath.append("files", new Blob([Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/r3sAAAAASUVORK5CYII=", "base64")], { type: "image/png" }), "escape.png");
+    const unsafePathResponse = await fetch(`${baseUrl}/api/media-library/upload`, {
+        method: "POST",
+        headers,
+        body: unsafeRelativePath
+    });
+    assert.equal(unsafePathResponse.status, 400);
 });

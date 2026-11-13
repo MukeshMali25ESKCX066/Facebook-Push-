@@ -30,7 +30,7 @@ const extensions = new Map([
 ]);
 const imageUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: MAX_IMAGE_BYTES, files: MAX_BATCH_FILES, fields: 2, parts: MAX_BATCH_FILES + 2 }
+    limits: { fileSize: MAX_IMAGE_BYTES, files: MAX_BATCH_FILES, fields: 3, parts: MAX_BATCH_FILES + 3 }
 });
 const archiveUpload = multer({
     storage: multer.memoryStorage(),
@@ -92,19 +92,42 @@ function normalizeTags(value) {
     return normalized;
 }
 
-function cleanFileName(value) {
-    const parts = String(value || "")
-        .replace(/\\/g, "/")
-        .split("/")
-        .filter(part => part && part !== "." && part !== "..")
-        .map(part => part.replace(/[\u0000-\u001f\u007f]/g, ""));
-    return parts.join("/").slice(0, 255);
+function splitRelativePath(value) {
+    const raw = String(value || "").replace(/\\/g, "/");
+    if (!raw || raw.startsWith("/") || /^[a-z]:/i.test(raw) || raw.split("/").includes("..")) {
+        throw new Error("The uploaded image path is unsafe.");
+    }
+    const parts = raw.split("/")
+        .filter(part => part && part !== ".")
+        .map(part => part.replace(/[\u0000-\u001f\u007f]/g, "").trim());
+    if (!parts.length || parts.some(part => !part || part.length > 255)) {
+        throw new Error("Each image must have a valid filename and folder path.");
+    }
+    const originalName = parts.pop();
+    const folderPath = parts.join("/");
+    if (folderPath.length > 500) throw new Error("Image folder paths must be 500 characters or fewer.");
+    return { originalName, folderPath };
+}
+
+function parseRelativePaths(value, fileCount) {
+    if (value == null || value === "") return null;
+    let paths;
+    try {
+        paths = JSON.parse(value);
+    } catch {
+        throw new Error("The uploaded image folder paths are invalid.");
+    }
+    if (!Array.isArray(paths) || paths.length !== fileCount) {
+        throw new Error("The uploaded image folder paths do not match the selected files.");
+    }
+    return paths.map(splitRelativePath);
 }
 
 function prepareImage(file) {
     if (!Buffer.isBuffer(file.buffer) || file.buffer.length === 0) throw new Error("An uploaded image is empty.");
     if (file.buffer.length > MAX_IMAGE_BYTES) throw new Error("Each image must be 8 MB or smaller.");
-    const originalName = cleanFileName(file.originalName || file.originalname);
+    const pathParts = splitRelativePath(file.relativePath || file.originalName || file.originalname);
+    const originalName = pathParts.originalName;
     const format = extensions.get(path.posix.extname(originalName).toLowerCase());
     if (!format) return null;
 
@@ -121,6 +144,7 @@ function prepareImage(file) {
     if (!originalName) throw new Error("Each image must have a filename.");
     return {
         originalName,
+        folderPath: pathParts.folderPath,
         buffer: file.buffer,
         extension: format.extension,
         mimeType: format.mimeType,
@@ -156,6 +180,7 @@ function toResponse(image, workspaceScopeId) {
     return {
         id: image.id,
         originalName: image.originalName,
+        folderPath: image.folderPath || "",
         size: image.size,
         mimeType: image.mimeType,
         width: image.width,
@@ -198,6 +223,7 @@ async function savePreparedImages(req, res, prepared, skipped, categoryValue, ta
                 extension: preparedImage.extension,
                 fileName: "",
                 originalName: preparedImage.originalName,
+                folderPath: preparedImage.folderPath,
                 size: preparedImage.buffer.length,
                 mimeType: preparedImage.mimeType,
                 width: preparedImage.width,
@@ -322,8 +348,15 @@ router.post("/upload", uploadMiddleware(imageUpload.array("files", MAX_BATCH_FIL
     try {
         const prepared = [];
         let skipped = 0;
-        for (const file of files) {
-            const image = prepareImage({ originalName: file.originalname, buffer: file.buffer });
+        const relativePaths = parseRelativePaths(req.body?.relativePaths, files.length);
+        for (const [index, file] of files.entries()) {
+            const image = prepareImage({
+                originalName: file.originalname,
+                relativePath: relativePaths?.[index]
+                    ? [relativePaths[index].folderPath, relativePaths[index].originalName].filter(Boolean).join("/")
+                    : "",
+                buffer: file.buffer
+            });
             if (image) prepared.push(image);
             else skipped += 1;
         }
@@ -393,6 +426,7 @@ router.post("/:id/replace", uploadMiddleware(archiveUpload.single("file")), asyn
             extension: replacement.extension,
             fileName: `${image.id}-${randomUUID()}.${replacement.extension}`,
             originalName: replacement.originalName,
+            folderPath: image.folderPath || "",
             size: replacement.buffer.length,
             mimeType: replacement.mimeType,
             width: replacement.width,

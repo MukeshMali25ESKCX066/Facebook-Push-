@@ -8,6 +8,8 @@ const ExcelJS = require("exceljs");
 const auth = require("./auth.js");
 const pages = require("./pages.js");
 const mediaLibrary = require("../services/media-library-store.js");
+const aiContent = require("../services/ai-content.js");
+const { buildResourcePlan, validatePublishingSettings } = require("../services/automatic-campaign-planner.js");
 const { parseHttpUrl, isPrivateAddress } = require("../services/public-url.js");
 
 const router = Router();
@@ -286,6 +288,10 @@ router.post("/", (req, res) => {
         articleUrls: [],
         imageIds: [],
         imageUsageHistory: [],
+        matchingHistory: [],
+        resourceAssignments: [],
+        aiContent: [],
+        aiGenerationLog: [],
         currentStep: 3,
         status: "draft",
         workspaceScopeId: req.workspaceScopeId,
@@ -310,21 +316,62 @@ router.patch("/:id", (req, res) => {
     }
 
     const updates = {};
+    let nextStep = Number(campaign.currentStep || 3);
+    let invalidatesPlan = false;
     try {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "pages")) {
             updates.pages = validateSelectedPages(req.body.pages, req.workspaceScopeId);
+            invalidatesPlan = JSON.stringify(updates.pages) !== JSON.stringify(campaign.pages || []);
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "articleUrls")) {
             updates.articleUrls = validateArticleUrls(req.body.articleUrls);
+            invalidatesPlan = invalidatesPlan || JSON.stringify(updates.articleUrls) !== JSON.stringify(campaign.articleUrls || []);
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "imageIds")) {
             updates.imageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, req.body.imageIds);
             updates.imageUsageHistory = buildImageUsageHistory(campaign, updates.imageIds);
+            invalidatesPlan = invalidatesPlan || JSON.stringify(updates.imageIds) !== JSON.stringify(campaign.imageIds || []);
+        }
+        if (invalidatesPlan && (Object.prototype.hasOwnProperty.call(req.body || {}, "aiSettings") ||
+            Object.prototype.hasOwnProperty.call(req.body || {}, "publishingSettings"))) {
+            throw new Error("Save the changed Pages, URLs, or images and rebuild the matching plan before changing later-step settings.");
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "aiSettings")) {
+            if (!campaign.resourceAssignments?.length) throw new Error("Build a matching plan before saving AI settings.");
+            updates.aiSettings = aiContent.validateSettings(req.body.aiSettings);
+            nextStep = Math.max(nextStep, 7);
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "publishingSettings")) {
+            if (!campaign.resourceAssignments?.length || !(updates.aiSettings || campaign.aiSettings)) {
+                throw new Error("Build a matching plan and save AI settings before configuring publishing.");
+            }
+            updates.publishingSettings = validatePublishingSettings(
+                req.body.publishingSettings,
+                updates.pages || campaign.pages || [],
+                campaign.timezone
+            );
+            if (updates.publishingSettings.automaticApproval) {
+                updates.aiContent = (campaign.aiContent || []).map(content =>
+                    content.status === "draft" ? { ...content, status: "approved" } : content
+                );
+            }
+            nextStep = Math.max(nextStep, 8);
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "currentStep")) {
             const step = Number(req.body.currentStep);
-            if (!Number.isInteger(step) || step < 3 || step > 5) throw new Error("Campaign workflow step is invalid.");
-            updates.currentStep = Math.max(Number(campaign.currentStep || 3), step);
+            if (!Number.isInteger(step) || step < 3 || step > 8) throw new Error("Campaign workflow step is invalid.");
+            if (step >= 6 && !campaign.resourceAssignments?.length) throw new Error("Build a matching plan before continuing to Step 6.");
+            if (step >= 7 && !(updates.aiSettings || campaign.aiSettings)) throw new Error("Save AI settings before continuing to Step 7.");
+            if (step >= 8 && !(updates.publishingSettings || campaign.publishingSettings)) throw new Error("Save publishing settings before continuing to Step 8.");
+            nextStep = Math.max(nextStep, step);
+        }
+        if (invalidatesPlan) {
+            updates.resourceAssignments = [];
+            updates.aiContent = [];
+            nextStep = Math.min(nextStep, 5);
+        }
+        if (nextStep !== Number(campaign.currentStep || 3) || Object.prototype.hasOwnProperty.call(req.body || {}, "currentStep")) {
+            updates.currentStep = nextStep;
         }
     } catch (error) {
         res.status(400).json({ error: error.message });
@@ -339,6 +386,177 @@ router.patch("/:id", (req, res) => {
         return;
     }
     res.json(campaign);
+});
+
+router.post("/:id/match-resources", (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+
+    try {
+        const selectedImageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, campaign.imageIds || []);
+        const selectedImages = selectedImageIds.map(id => mediaLibrary.findImage(req.workspaceScopeId, id));
+        const existingPlanHistory = (campaign.resourceAssignments || []).flatMap(round =>
+            (round.assignments || []).map(assignment => ({
+                pageId: assignment.pageId,
+                articleUrl: assignment.articleUrl,
+                imageId: assignment.imageId
+            }))
+        );
+        const plan = buildResourcePlan({
+            pages: campaign.pages || [],
+            articles: campaign.articleUrls || [],
+            images: selectedImages,
+            previousHistory: [...(campaign.matchingHistory || []), ...existingPlanHistory]
+        });
+        const previous = { ...campaign };
+        Object.assign(campaign, {
+            resourceAssignments: plan.rounds,
+            matchingHistory: plan.history,
+            aiContent: [],
+            currentStep: 6,
+            updatedAt: new Date().toISOString()
+        });
+        if (!persistCampaigns()) {
+            Object.assign(campaign, previous);
+            return res.status(500).json({ error: "The matching plan could not be saved to encrypted storage." });
+        }
+        return res.json({ campaign, resourceCoverage: plan.resourceCoverage });
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+});
+
+router.post("/:id/ai-content/generate", async (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+
+    let settings;
+    let round;
+    let roundIndex;
+    try {
+        settings = aiContent.validateSettings(req.body?.settings || campaign.aiSettings || {});
+        roundIndex = Number(req.body?.roundIndex);
+        if (!Number.isInteger(roundIndex) || roundIndex < 0) throw new Error("Choose a valid matching-plan round.");
+        round = (campaign.resourceAssignments || []).find(item => item.roundIndex === roundIndex);
+        if (!round) throw new Error("Build a matching plan and choose one of its rounds.");
+        if (!(campaign.pages || []).length || round.assignments.length !== campaign.pages.length) {
+            throw new Error("The selected matching round is incomplete. Rebuild the matching plan.");
+        }
+        const priorRoundContent = (campaign.aiContent || []).filter(content => content.roundIndex === roundIndex);
+        if (priorRoundContent.some(content => content.status === "approved")) {
+            return res.status(409).json({ error: "This round contains approved posts and cannot be regenerated." });
+        }
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+
+    const pagesForGeneration = round.assignments.map(assignment => {
+        const page = campaign.pages.find(item => item.id === assignment.pageId);
+        return {
+            ...page,
+            articleUrl: assignment.articleUrl,
+            articleTitle: assignment.articleTitle,
+            articleDescription: assignment.articleDescription
+        };
+    });
+    try {
+        const result = await aiContent.generateContent({
+            eventName: campaign.campaignName,
+            eventDate: "",
+            eventCategory: campaign.campaignType,
+            description: campaign.description,
+            article: {
+                title: round.assignments[0].articleTitle,
+                description: round.assignments[0].articleDescription
+            }
+        }, pagesForGeneration, settings);
+        if (!Array.isArray(result.posts) || result.posts.length !== round.assignments.length) {
+            throw new Error("The AI provider returned an incomplete set of Page posts.");
+        }
+        const postsByPage = new Map(result.posts.map(post => [String(post.pageId), post]));
+        const createdAt = new Date().toISOString();
+        const generated = round.assignments.map(assignment => {
+            const post = postsByPage.get(String(assignment.pageId));
+            if (!post?.caption) throw new Error("The AI provider did not return a caption for every Page.");
+            return {
+                id: randomUUID(),
+                ...post,
+                pageName: assignment.pageName,
+                articleUrl: assignment.articleUrl,
+                articleTitle: assignment.articleTitle,
+                imageId: assignment.imageId,
+                imageName: assignment.imageName,
+                folderPath: assignment.folderPath,
+                roundIndex,
+                status: campaign.publishingSettings?.automaticApproval ? "approved" : "draft",
+                createdAt,
+                updatedAt: createdAt
+            };
+        });
+        if (settings.detectDuplicates) {
+            const existingCaptions = (campaign.aiContent || [])
+                .filter(content => content.roundIndex !== roundIndex)
+                .map(content => String(content.caption || "").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim());
+            const seen = new Set(existingCaptions);
+            for (const post of generated) {
+                const normalized = post.caption.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+                if (seen.has(normalized)) throw new Error("The AI returned a caption already used in another round. Regenerate this round.");
+                seen.add(normalized);
+            }
+        }
+
+        const previous = { ...campaign };
+        campaign.aiSettings = settings;
+        campaign.aiContent = [
+            ...(campaign.aiContent || []).filter(content => content.roundIndex !== roundIndex),
+            ...generated
+        ];
+        campaign.aiGenerationLog = [
+            ...(campaign.aiGenerationLog || []),
+            {
+                roundIndex,
+                createdAt,
+                provider: result.usage?.provider || "",
+                model: result.usage?.model || "",
+                inputTokens: Number(result.usage?.inputTokens || 0),
+                outputTokens: Number(result.usage?.outputTokens || 0)
+            }
+        ].slice(-500);
+        campaign.currentStep = Math.max(Number(campaign.currentStep || 3), 7);
+        campaign.updatedAt = createdAt;
+        if (!persistCampaigns()) {
+            Object.assign(campaign, previous);
+            return res.status(500).json({ error: "Generated content could not be saved to encrypted storage." });
+        }
+        return res.json(campaign);
+    } catch (error) {
+        const status = Number(error.status);
+        return res.status(status >= 400 && status < 600 ? status : 502).json({
+            error: error.message || "AI content generation failed."
+        });
+    }
+});
+
+router.patch("/:id/ai-content/:contentId/approval", (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    const content = (campaign.aiContent || []).find(item => item.id === req.params.contentId);
+    if (!content) return res.status(404).json({ error: "Generated post not found." });
+    const status = String(req.body?.status || "");
+    if (!["draft", "approved"].includes(status)) return res.status(400).json({ error: "Choose draft or approved as the post status." });
+
+    const previous = { ...content };
+    content.status = status;
+    content.updatedAt = new Date().toISOString();
+    campaign.updatedAt = content.updatedAt;
+    if (!persistCampaigns()) {
+        Object.assign(content, previous);
+        return res.status(500).json({ error: "Post approval could not be saved." });
+    }
+    return res.json(campaign);
 });
 
 router.post("/:id/import-urls", (req, res, next) => {
@@ -382,7 +600,12 @@ router.post("/:id/import-urls", (req, res, next) => {
         });
         const articleUrls = validateArticleUrls(unique);
         const previous = { ...campaign };
-        Object.assign(campaign, { articleUrls, currentStep: 4, updatedAt: new Date().toISOString() });
+        const changed = JSON.stringify(articleUrls) !== JSON.stringify(campaign.articleUrls || []);
+        Object.assign(campaign, {
+            articleUrls,
+            ...(changed ? { resourceAssignments: [], aiContent: [], currentStep: 4 } : {}),
+            updatedAt: new Date().toISOString()
+        });
         if (!persistCampaigns()) {
             Object.assign(campaign, previous);
             res.status(500).json({ error: "Imported URLs could not be saved to encrypted storage." });

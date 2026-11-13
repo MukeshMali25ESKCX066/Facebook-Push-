@@ -12,9 +12,17 @@
     imageTotalBytes: 0,
     imageLimits: {},
     imageLoadError: "",
+    imageFolder: "",
+    imageSearch: "",
+    imageSelection: new Set(),
+    imageSelectionCampaignId: "",
     discoveredArticles: [],
+    discoverySearch: "",
     discoveryWarnings: [],
     discoveryTruncated: false,
+    aiRoundIndex: 0,
+    aiSettingsDraft: null,
+    publishingSettingsDraft: null,
     loadError: "",
     workflowMessage: ""
   };
@@ -54,7 +62,10 @@
       "create-campaign": "Step 2 · Create Campaign",
       "facebook-pages": "Step 3 · Select Facebook Pages",
       "url-library": "Step 4 · Add Article URLs",
-      "image-library": "Step 5 · Upload Images"
+      "image-library": "Step 5 · Upload Images",
+      "smart-matching": "Step 6 · Smart URL & Image Matching",
+      "ai-settings": "Step 7 · AI Content Settings",
+      "publishing-settings": "Step 8 · Auto Publishing"
     };
     if (stage && stages[view]) stage.textContent = stages[view];
   }
@@ -184,7 +195,7 @@
       <section class="ah-coming">
         <span class="ah-coming-icon" aria-hidden="true">✦</span>
         <h2>${escapeHtml(label)}</h2>
-        <p>This module will be added in a later workflow step. Campaign setup, Page selection, and article URL import are available now.</p>
+        <p>This module is not connected to the campaign wizard yet. Use the campaign setup flow for Steps 2–8 of Automatic Auto Publishing.</p>
         <button type="button" class="ah-button ah-button-secondary" data-ah-action="overview">Back to Overview</button>
       </section>`;
   }
@@ -296,7 +307,7 @@
         <div class="ah-article-actions"><span class="ah-status ah-status-ready">${escapeHtml(article.status || "Ready")}</span><button type="button" class="ah-link-button" data-ah-action="article-metadata" data-article-index="${index}">Fetch metadata</button><button type="button" class="ah-link-button ah-link-danger" data-ah-action="remove-article" data-article-index="${index}">Remove</button></div>
       </article>`).join("");
     const discoveredRows = state.discoveredArticles.map((article, index) => `
-      <label class="ah-discovered-row">
+      <label class="ah-discovered-row" data-discovery-row>
         <input type="checkbox" data-discovery-index="${index}">
         <span><strong>${escapeHtml(article.title || article.url)}</strong><small>${escapeHtml(article.url)}</small></span>
         <span class="ah-status ah-status-ready">${escapeHtml(article.status || "Ready")}</span>
@@ -313,7 +324,8 @@
         ${state.discoveryWarnings.length && !state.discoveredArticles.length ? `<div class="ah-inline-warning">${state.discoveryWarnings.map(warning => escapeHtml(warning)).join("<br>")}</div>` : ""}
         ${state.discoveredArticles.length ? `
           <section class="ah-discovery-results">
-            <div class="ah-panel-heading"><div><h3>Discovered articles (${state.discoveredArticles.length})</h3><p>Select the articles to keep in this campaign.</p></div><button type="button" class="ah-link-button" data-ah-action="select-discovered">Select all</button></div>
+            <div class="ah-panel-heading"><div><h3>Discovered articles (${state.discoveredArticles.length})</h3><p>Select the articles to keep in this campaign.</p></div><button type="button" class="ah-link-button" data-ah-action="select-discovered">Select visible</button></div>
+            <div class="ah-page-toolbar"><input id="ah-discovery-search" type="search" value="${escapeHtml(state.discoverySearch)}" placeholder="Search discovered articles by title or URL"></div>
             ${state.discoveryTruncated ? `<div class="ah-inline-warning">Showing the first 200 results. Run discovery on a sitemap for a larger site.</div>` : ""}
             ${state.discoveryWarnings.length ? `<div class="ah-inline-warning">${state.discoveryWarnings.map(warning => escapeHtml(warning)).join("<br>")}</div>` : ""}
             <div class="ah-discovery-list">${discoveredRows}</div>
@@ -330,6 +342,15 @@
         <div class="ah-article-list">${articleRows || `<div class="ah-empty">No article URLs added yet.</div>`}</div>
         <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Article List</button><button type="button" class="ah-button" data-ah-action="save-articles-and-images">Continue to Upload Images</button></div></div>
       </section>`;
+    const discoverySearch = root.querySelector("#ah-discovery-search");
+    if (discoverySearch) {
+      discoverySearch.addEventListener("input", () => {
+        state.discoverySearch = discoverySearch.value.trim().toLowerCase();
+        root.querySelectorAll("[data-discovery-row]").forEach(row => {
+          row.hidden = !row.textContent.toLowerCase().includes(state.discoverySearch);
+        });
+      });
+    }
   }
 
   function formatFileSize(value) {
@@ -344,16 +365,47 @@
       renderCampaignChooser("image-library");
       return;
     }
-    const selectedIds = new Set(campaign.imageIds || []);
-    const imageCards = state.imageAssets.map(image => {
+    if (state.imageSelectionCampaignId !== campaign.id) {
+      state.imageSelectionCampaignId = campaign.id;
+      state.imageSelection = new Set(campaign.imageIds || []);
+    }
+    const selectedIds = state.imageSelection;
+    const prefix = state.imageFolder ? `${state.imageFolder}/` : "";
+    const search = state.imageSearch.trim().toLowerCase();
+    const folderNames = new Set();
+    for (const image of state.imageAssets) {
+      const path = String(image.folderPath || "");
+      if (!path.startsWith(prefix) || path === state.imageFolder) continue;
+      const remaining = path.slice(prefix.length);
+      if (remaining.includes("/")) folderNames.add(remaining.split("/")[0]);
+      else if (remaining) folderNames.add(remaining);
+    }
+    const folders = [...folderNames].sort((left, right) => left.localeCompare(right));
+    const folderCards = folders.map(name => {
+      const folderPath = [state.imageFolder, name].filter(Boolean).join("/");
+      const count = state.imageAssets.filter(image =>
+        image.folderPath === folderPath || String(image.folderPath || "").startsWith(`${folderPath}/`)
+      ).length;
+      return `<button type="button" class="ah-image-folder" data-ah-action="open-image-folder" data-folder-path="${escapeHtml(folderPath)}">
+        <span aria-hidden="true">📁</span><strong>${escapeHtml(name)}</strong><small>${count} image${count === 1 ? "" : "s"}</small>
+      </button>`;
+    }).join("");
+    const inScope = state.imageAssets.filter(image => {
+      const path = String(image.folderPath || "");
+      if (search) return !state.imageFolder || path === state.imageFolder || path.startsWith(prefix);
+      return path === state.imageFolder;
+    });
+    const imageCards = inScope.map(image => {
       const history = (image.usageHistory || []).map(entry => `
         <li>${escapeHtml(entry.campaignName)} · ${entry.removedAt ? "Previously used" : "In use"}</li>`).join("");
-      return `<article class="ah-image-card" data-image-card="${escapeHtml(image.id)}">
+      const searchableText = `${image.originalName} ${image.category} ${(image.tags || []).join(" ")} ${image.folderPath || ""}`.toLowerCase();
+      const hidden = search && !searchableText.includes(search);
+      return `<article class="ah-image-card" data-image-card="${escapeHtml(image.id)}" data-folder-path="${escapeHtml(image.folderPath || "")}" data-search-text="${escapeHtml(searchableText)}" ${hidden ? "hidden" : ""}>
         <label class="ah-image-preview">
           <input type="checkbox" data-library-image-id="${escapeHtml(image.id)}" ${selectedIds.has(image.id) ? "checked" : ""} aria-label="Select ${escapeHtml(image.originalName)} for this campaign">
           <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.originalName)}" loading="lazy">
         </label>
-        <div class="ah-image-card-heading"><strong>${escapeHtml(image.originalName)}</strong><small>${escapeHtml(formatFileSize(image.size))} · ${image.width} × ${image.height}</small></div>
+        <div class="ah-image-card-heading"><strong>${escapeHtml(image.originalName)}</strong><small>${escapeHtml(image.folderPath || "Root folder")} · ${escapeHtml(formatFileSize(image.size))} · ${image.width} × ${image.height}</small></div>
         <div class="ah-image-fields">
           <label>Category<input type="text" data-image-category maxlength="60" value="${escapeHtml(image.category)}"></label>
           <label>Tags<input type="text" data-image-tags maxlength="840" value="${escapeHtml((image.tags || []).join(", "))}" placeholder="festival, greeting"></label>
@@ -366,8 +418,15 @@
         </div>
       </article>`;
     }).join("");
+    const hasVisibleImages = inScope.some(image => {
+      const searchableText = `${image.originalName} ${image.category} ${(image.tags || []).join(" ")} ${image.folderPath || ""}`.toLowerCase();
+      return !search || searchableText.includes(search);
+    });
     const maxImages = state.imageLimits.maxImages || 500;
     const maxBytes = state.imageLimits.maxBytes || 1024 * 1024 * 1024;
+    const parentFolder = state.imageFolder.includes("/")
+      ? state.imageFolder.split("/").slice(0, -1).join("/")
+      : "";
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
@@ -386,9 +445,275 @@
           <p class="ah-help-text">JPG, JPEG, PNG, and WEBP. Up to ${maxImages} images and ${formatFileSize(maxBytes)} per workspace; each image up to 8 MB. ZIPs can contain up to 200 images and expand to 100 MB.</p>
         </section>
         <div class="ah-image-library-summary">${state.imageTotal} / ${maxImages} images · ${formatFileSize(state.imageTotalBytes)} / ${formatFileSize(maxBytes)}</div>
-        ${state.imageAssets.length ? `<div class="ah-image-library-grid">${imageCards}</div>` : `<div class="ah-empty">No images uploaded yet. Select images, a folder, or a ZIP archive to get started.</div>`}
-        <div class="ah-workflow-footer"><span>${selectedIds.size} image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><button type="button" class="ah-button" data-ah-action="save-image-selection">Save selected images to campaign</button></div>
+        <div class="ah-image-browser">
+          ${state.imageFolder ? `<button type="button" class="ah-link-button" data-ah-action="open-image-folder" data-folder-path="${escapeHtml(parentFolder)}">← Back to ${escapeHtml(parentFolder || "all folders")}</button>` : ""}
+          <div class="ah-page-toolbar"><input id="ah-image-search" type="search" value="${escapeHtml(state.imageSearch)}" placeholder="Search images in this ${state.imageFolder ? "folder" : "library"}"></div>
+          <div class="ah-image-toolbar"><button type="button" class="ah-button ah-button-secondary" data-ah-action="select-visible-images">Select all visible</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="select-all-images">Select all in library</button><span>${escapeHtml(state.imageFolder || "All folders")}</span></div>
+          ${folders.length ? `<div class="ah-image-folder-grid">${folderCards}</div>` : ""}
+          ${imageCards ? `<div class="ah-image-library-grid">${imageCards}</div>` : ""}
+          <div class="ah-empty" data-image-empty ${hasVisibleImages ? "hidden" : ""}>${search ? "No images match this search." : state.imageFolder ? "This folder has no images." : state.imageAssets.length ? "No images in the root folder." : "No images uploaded yet. Select images, a folder, or a ZIP archive to get started."}</div>
+        </div>
+        <div class="ah-workflow-footer"><span id="ah-image-selection-count">${selectedIds.size} image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection">Save selected images</button><button type="button" class="ah-button" data-ah-action="save-image-selection-and-match">Save images &amp; continue to matching →</button></div></div>
       </section>`;
+  }
+
+  function renderSmartMatching() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("smart-matching");
+      return;
+    }
+    const rounds = campaign.resourceAssignments || [];
+    const pageCount = (campaign.pages || []).length;
+    const imageCount = (campaign.imageIds || []).length;
+    const articleCount = (campaign.articleUrls || []).length;
+    const canMatch = pageCount > 0 && articleCount >= pageCount && imageCount >= pageCount;
+    const roundRows = rounds.map(round => `
+      <details class="ah-matching-round" ${round.roundIndex === 0 ? "open" : ""}>
+        <summary>Round ${round.roundIndex + 1} · ${round.assignments.length} Pages</summary>
+        <div class="ah-matching-table">
+          ${round.assignments.map(assignment => {
+            const image = state.imageAssets.find(item => item.id === assignment.imageId);
+            return `<article class="ah-match-row">
+              <strong>${escapeHtml(assignment.pageName)}</strong>
+              <a href="${escapeHtml(assignment.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(assignment.articleTitle || assignment.articleUrl)}</a>
+              <span>${escapeHtml(assignment.imageName)}${assignment.folderPath ? ` · ${escapeHtml(assignment.folderPath)}` : ""}</span>
+              ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(assignment.imageName)}" loading="lazy">` : ""}
+            </article>`;
+          }).join("")}
+        </div>
+      </details>`).join("");
+    root.innerHTML = `
+      ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 6 · Smart URL &amp; Image Matching</p><h2>Assign unique resources to each Page</h2><p>Every selected URL and image is covered. Each Page receives a different URL and image in a round; resources repeat only after they are exhausted.</p></div></div>
+        <div class="ah-matching-summary">
+          <article><strong>${pageCount}</strong><span>Pages</span></article>
+          <article><strong>${articleCount}</strong><span>Selected URLs</span></article>
+          <article><strong>${imageCount}</strong><span>Selected images</span></article>
+          <article><strong>${rounds.length}</strong><span>Rounds</span></article>
+        </div>
+        ${!canMatch ? `<div class="ah-inline-warning">Select at least one authorized Page and at least ${pageCount || 1} article URLs and ${pageCount || 1} images to build one complete unique round.</div>` : ""}
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="build-matching-plan" ${canMatch ? "" : "disabled"}>${rounds.length ? "Rebuild matching plan" : "Build matching plan"}</button>${rounds.length ? `<button type="button" class="ah-button" data-ah-action="continue-ai-settings">Continue to AI Settings →</button>` : ""}</div>
+        ${rounds.length ? `<div class="ah-matching-rounds">${roundRows}</div>` : `<div class="ah-empty">Build a matching plan to preview the Page, URL, and image assignments.</div>`}
+      </section>`;
+  }
+
+  function renderAiSettings() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("ai-settings");
+      return;
+    }
+    const settings = state.aiSettingsDraft || campaign.aiSettings || {
+      language: "English",
+      tone: "Engaging",
+      goal: "Website Traffic",
+      captionLength: "Medium",
+      emoji: true,
+      hashtags: true,
+      ctaMode: "automatic",
+      manualCta: "",
+      variations: 3,
+      imageStyle: "Festival",
+      perPageVariation: true,
+      detectDuplicates: true
+    };
+    const rounds = campaign.resourceAssignments || [];
+    const generated = campaign.aiContent || [];
+    const generatedRounds = new Set(generated.map(item => item.roundIndex));
+    if (!rounds.some(round => round.roundIndex === state.aiRoundIndex)) {
+      state.aiRoundIndex = rounds.find(round => !generatedRounds.has(round.roundIndex))?.roundIndex ?? rounds[0]?.roundIndex ?? 0;
+    }
+    const selectedRound = rounds.find(round => round.roundIndex === state.aiRoundIndex);
+    const roundContent = generated.filter(item => item.roundIndex === state.aiRoundIndex);
+    const approvedInRound = roundContent.some(item => item.status === "approved");
+    const contentCards = roundContent.map(post => {
+      const image = state.imageAssets.find(item => item.id === post.imageId);
+      return `<article class="ah-generated-post">
+        <div class="ah-generated-post-heading"><strong>${escapeHtml(post.pageName)}</strong><span class="ah-status ${post.status === "approved" ? "ah-status-ready" : ""}">${escapeHtml(post.status)}</span></div>
+        ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(post.imageName)}" loading="lazy">` : ""}
+        <a href="${escapeHtml(post.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(post.articleTitle || post.articleUrl)}</a>
+        <p>${escapeHtml(post.caption)}</p>
+        ${post.cta ? `<small>CTA: ${escapeHtml(post.cta)}</small>` : ""}
+        ${(post.hashtags || []).length ? `<small>${escapeHtml(post.hashtags.join(" "))}</small>` : ""}
+        <button type="button" class="ah-button ah-button-secondary" data-ah-action="toggle-post-approval" data-content-id="${escapeHtml(post.id)}" data-next-status="${post.status === "approved" ? "draft" : "approved"}">${post.status === "approved" ? "Return to draft" : "Approve post"}</button>
+      </article>`;
+    }).join("");
+    root.innerHTML = `
+      ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 7 · AI Content Settings</p><h2>Configure captions for each Page</h2><p>Save settings or explicitly generate captions for one matching round. Continuing does not use AI.</p></div></div>
+        ${rounds.length ? "" : `<div class="ah-inline-warning">Build the Step 6 matching plan before configuring AI content.</div>`}
+        <form id="ah-ai-settings-form">
+          <div class="ah-form-grid">
+            <label class="ah-field">Caption language<input name="language" maxlength="40" value="${escapeHtml(settings.language)}" required></label>
+            <label class="ah-field">Caption tone<select name="tone">${["Friendly", "Professional", "Emotional", "Informative", "Engaging"].map(value => `<option ${settings.tone === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+            <label class="ah-field">Content goal<select name="goal">${["Website Traffic", "Engagement", "Awareness"].map(value => `<option ${settings.goal === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+            <label class="ah-field">Caption length<select name="captionLength">${["Short", "Medium", "Long"].map(value => `<option ${settings.captionLength === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+            <label class="ah-field">CTA style<select name="ctaMode"><option value="automatic" ${settings.ctaMode === "automatic" ? "selected" : ""}>AI generated</option><option value="manual" ${settings.ctaMode === "manual" ? "selected" : ""}>Use my CTA</option></select></label>
+            <label class="ah-field">Manual CTA<input name="manualCta" maxlength="120" value="${escapeHtml(settings.manualCta || "")}" placeholder="e.g. Read the full article"></label>
+            <label class="ah-check-field"><input type="checkbox" name="hashtags" ${settings.hashtags !== false ? "checked" : ""}>Generate hashtags</label>
+            <label class="ah-check-field"><input type="checkbox" name="emoji" ${settings.emoji !== false ? "checked" : ""}>Allow emojis</label>
+            <label class="ah-check-field"><input type="checkbox" name="perPageVariation" ${settings.perPageVariation !== false ? "checked" : ""}>Create a distinct caption for each Page</label>
+            <label class="ah-check-field"><input type="checkbox" name="detectDuplicates" ${settings.detectDuplicates !== false ? "checked" : ""}>Detect duplicate captions across Pages and rounds</label>
+          </div>
+          <div class="ah-form-footer"><span>AI runs only when you press the generation button.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${rounds.length ? "" : "disabled"}>Save AI settings &amp; Continue →</button></div></div>
+        </form>
+        ${rounds.length ? `
+          <section class="ah-ai-generation">
+            <div class="ah-panel-heading"><div><h3>Generate and review captions</h3><p>Choose a matching round. Each generation uses one post per selected Page.</p></div></div>
+            <div class="ah-page-toolbar"><label class="ah-field">Matching round<select id="ah-ai-round">${rounds.map(round => `<option value="${round.roundIndex}" ${round.roundIndex === state.aiRoundIndex ? "selected" : ""}>Round ${round.roundIndex + 1}${generatedRounds.has(round.roundIndex) ? " · generated" : ""}</option>`).join("")}</select></label><button type="button" class="ah-button ah-button-secondary" data-ah-action="generate-ai-round" ${approvedInRound || !selectedRound ? "disabled" : ""}>${roundContent.length ? "Regenerate this round" : "Generate captions for this round"}</button></div>
+            ${approvedInRound ? `<div class="ah-help-text">This round contains approved posts and cannot be regenerated. Return them to draft first.</div>` : ""}
+            ${contentCards ? `<div class="ah-generated-post-grid">${contentCards}</div>` : `<div class="ah-empty">No captions generated for this round. Choose settings above, then press Generate.</div>`}
+          </section>` : ""}
+      </section>`;
+    const form = root.querySelector("#ah-ai-settings-form");
+    form.addEventListener("input", () => { state.aiSettingsDraft = collectAiSettings(form); });
+    form.addEventListener("change", () => { state.aiSettingsDraft = collectAiSettings(form); });
+    root.querySelector("#ah-ai-round")?.addEventListener("change", event => {
+      state.aiSettingsDraft = collectAiSettings(form);
+      state.aiRoundIndex = Number(event.target.value);
+      renderAiSettings();
+    });
+  }
+
+  function defaultPublishingSettings(campaign) {
+    const times = ["09:00", "12:30", "17:00", "20:00"];
+    const scheduleDays = {};
+    for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
+      const enabled = !["Sunday", "Saturday"].includes(day);
+      scheduleDays[day] = { enabled, times: enabled ? [...times] : [] };
+    }
+    return {
+      enabled: false,
+      automaticApproval: false,
+      roundRobin: true,
+      timezone: campaign.timezone || "Asia/Kolkata",
+      allowedHours: { start: "09:00", end: "21:00" },
+      weekendPublishing: false,
+      scheduleDays,
+      pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 120, dailyPostLimit: 4 }])),
+      retryAttempts: 3,
+      retryDelayMinutes: 5
+    };
+  }
+
+  function renderPublishingSettings() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("publishing-settings");
+      return;
+    }
+    const settings = state.publishingSettingsDraft || campaign.publishingSettings || defaultPublishingSettings(campaign);
+    const canConfigure = Boolean(campaign.resourceAssignments?.length && campaign.aiSettings);
+    const dayCards = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(day => {
+      const daySettings = settings.scheduleDays?.[day] || { enabled: false, times: [] };
+      return `<article class="ah-day-card">
+        <label class="ah-check-field"><input type="checkbox" data-schedule-day="${day}" ${daySettings.enabled ? "checked" : ""} ${["Sunday", "Saturday"].includes(day) && !settings.weekendPublishing ? "disabled" : ""}>${day}</label>
+        <div class="ah-time-chips">${daySettings.times.map(time => `<span>${escapeHtml(time)}<button type="button" aria-label="Remove ${escapeHtml(time)} on ${day}" data-ah-action="remove-posting-time" data-day="${day}" data-time="${escapeHtml(time)}">×</button></span>`).join("") || `<small>No times added</small>`}</div>
+      </article>`;
+    }).join("");
+    const pageRows = (campaign.pages || []).map(page => {
+      const config = settings.pageSettings?.[page.id] || { intervalMinutes: 120, dailyPostLimit: 4 };
+      return `<div class="ah-page-setting-row">
+        <strong>${escapeHtml(page.name)}</strong>
+        <label>Interval (minutes)<input type="number" min="15" max="1440" step="1" data-page-interval="${escapeHtml(page.id)}" value="${escapeHtml(config.intervalMinutes)}"></label>
+        <label>Daily limit<input type="number" min="1" max="20" step="1" data-page-limit="${escapeHtml(page.id)}" value="${escapeHtml(config.dailyPostLimit)}"></label>
+      </div>`;
+    }).join("");
+    root.innerHTML = `
+      ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${!canConfigure ? `<div class="ah-inline-warning">Complete Smart Matching and save AI settings before configuring Auto Publishing.</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Auto Publishing Configuration</p><h2>Set a safe publishing schedule</h2><p>These settings are saved as a draft configuration. Saving does not start a publishing job.</p></div></div>
+        <form id="ah-publishing-settings-form">
+          <div class="ah-check-grid">
+            <label class="ah-check-field"><input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>Enable auto publishing when campaign is explicitly started</label>
+            <label class="ah-check-field"><input type="checkbox" name="automaticApproval" ${settings.automaticApproval ? "checked" : ""}>Automatically approve generated posts</label>
+            <label class="ah-check-field"><input type="checkbox" name="roundRobin" ${settings.roundRobin !== false ? "checked" : ""}>Round-robin Page selection</label>
+            <label class="ah-check-field"><input type="checkbox" name="weekendPublishing" ${settings.weekendPublishing ? "checked" : ""}>Allow weekend publishing</label>
+          </div>
+          <div class="ah-form-grid">
+            <label class="ah-field">Timezone<input name="timezone" maxlength="100" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Kolkata" required></label>
+            <label class="ah-field">Allowed hours<input type="time" name="allowedStart" value="${escapeHtml(settings.allowedHours?.start || "09:00")}" required></label>
+            <label class="ah-field">Allowed hours end<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "21:00")}" required></label>
+            <label class="ah-field">Retry attempts<select name="retryAttempts">${[0, 1, 2, 3, 4, 5].map(value => `<option value="${value}" ${Number(settings.retryAttempts) === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+            <label class="ah-field">Retry delay (minutes)<input type="number" name="retryDelayMinutes" min="1" max="1440" value="${escapeHtml(settings.retryDelayMinutes || 5)}" required></label>
+          </div>
+          <section class="ah-schedule-editor">
+            <div class="ah-panel-heading"><div><h3>Weekly posting times</h3><p>Choose enabled days and add times inside your allowed-hours range.</p></div><button type="button" class="ah-link-button" data-ah-action="clear-posting-times">Clear all times</button></div>
+            <div class="ah-import-controls"><label class="ah-field">Add time to<select id="ah-posting-day"><option value="Everyday">Every day</option>${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => `<option value="${day}">${day}</option>`).join("")}</select></label><label class="ah-field">Posting time<input id="ah-posting-time" type="time" value="09:00"></label><button type="button" class="ah-button ah-button-secondary" data-ah-action="add-posting-time">Add posting time</button></div>
+            <div class="ah-day-grid">${dayCards}</div>
+          </section>
+          <section class="ah-page-settings">
+            <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>Configure a minimum interval and daily posting cap independently for each Page.</p></div></div>
+            ${pageRows || `<div class="ah-empty">Select Facebook Pages before setting Page-specific limits.</div>`}
+          </section>
+          <div class="ah-form-footer"><span>Auto publishing starts only after a separate campaign-start action.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${canConfigure ? "" : "disabled"}>Save publishing settings</button></div></div>
+        </form>
+      </section>`;
+    const form = root.querySelector("#ah-publishing-settings-form");
+    form.addEventListener("input", () => { state.publishingSettingsDraft = collectPublishingSettings(form); });
+    form.addEventListener("change", event => {
+      state.publishingSettingsDraft = collectPublishingSettings(form);
+      if (event.target.name === "weekendPublishing" && !event.target.checked) {
+        state.publishingSettingsDraft.scheduleDays.Saturday = { enabled: false, times: [] };
+        state.publishingSettingsDraft.scheduleDays.Sunday = { enabled: false, times: [] };
+        renderPublishingSettings();
+      }
+    });
+  }
+
+  function collectAiSettings(form) {
+    const values = new FormData(form);
+    return {
+      language: values.get("language"),
+      tone: values.get("tone"),
+      goal: values.get("goal"),
+      captionLength: values.get("captionLength"),
+      ctaMode: values.get("ctaMode"),
+      manualCta: values.get("manualCta"),
+      hashtags: form.elements.hashtags.checked,
+      emoji: form.elements.emoji.checked,
+      perPageVariation: form.elements.perPageVariation.checked,
+      detectDuplicates: form.elements.detectDuplicates.checked,
+      variations: 3
+    };
+  }
+
+  function collectPublishingSettings(form) {
+    const values = new FormData(form);
+    const current = state.publishingSettingsDraft || getActiveCampaign()?.publishingSettings || defaultPublishingSettings(getActiveCampaign());
+    const scheduleDays = {};
+    for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
+      const dayControl = form.querySelector(`[data-schedule-day="${day}"]`);
+      scheduleDays[day] = {
+        enabled: dayControl ? dayControl.checked : Boolean(current.scheduleDays?.[day]?.enabled),
+        times: [...(current.scheduleDays?.[day]?.times || [])]
+      };
+    }
+    const pageSettings = {};
+    for (const page of getActiveCampaign()?.pages || []) {
+      pageSettings[page.id] = {
+        intervalMinutes: Number(form.querySelector(`[data-page-interval="${CSS.escape(page.id)}"]`)?.value || 120),
+        dailyPostLimit: Number(form.querySelector(`[data-page-limit="${CSS.escape(page.id)}"]`)?.value || 4)
+      };
+    }
+    return {
+      enabled: form.elements.enabled.checked,
+      automaticApproval: form.elements.automaticApproval.checked,
+      roundRobin: form.elements.roundRobin.checked,
+      weekendPublishing: form.elements.weekendPublishing.checked,
+      timezone: values.get("timezone"),
+      allowedHours: { start: values.get("allowedStart"), end: values.get("allowedEnd") },
+      scheduleDays,
+      pageSettings,
+      retryAttempts: Number(values.get("retryAttempts")),
+      retryDelayMinutes: Number(values.get("retryDelayMinutes"))
+    };
   }
 
   function normalizeArticleEntry(value) {
@@ -482,6 +807,7 @@
       });
       if (state.activeCampaignId !== campaignId) return;
       state.discoveredArticles = result.articles || [];
+      state.discoverySearch = "";
       state.discoveryWarnings = result.warnings || [];
       state.discoveryTruncated = Boolean(result.truncated);
       state.workflowMessage = state.discoveredArticles.length
@@ -491,6 +817,7 @@
       if (state.activeCampaignId !== campaignId) return;
       state.workflowMessage = error.message;
       state.discoveredArticles = [];
+      state.discoverySearch = "";
       state.discoveryWarnings = [];
       state.discoveryTruncated = false;
     }
@@ -615,6 +942,8 @@
       state.imageLoadError = error.message;
     }
     if (state.currentView === "image-library") renderImageLibrary();
+    else if (state.currentView === "smart-matching") renderSmartMatching();
+    else if (state.currentView === "ai-settings") renderAiSettings();
   }
 
   function getImageUploadDetails() {
@@ -646,8 +975,9 @@
         const formData = new FormData();
         formData.append("category", category);
         formData.append("tags", tags);
+        formData.append("relativePaths", JSON.stringify(batch.map(file => file.webkitRelativePath || file.name)));
         for (const file of batch) {
-          formData.append("files", file, file.webkitRelativePath || file.name);
+          formData.append("files", file, file.name);
         }
         state.workflowMessage = `Uploading images ${Math.min(offset + batch.length, supported.length)} of ${supported.length}…`;
         renderImageLibrary();
@@ -735,6 +1065,7 @@
     try {
       await request(`/api/media-library/${encodeURIComponent(imageId)}`, { method: "DELETE" });
       state.imageAssets = state.imageAssets.filter(item => item.id !== imageId);
+      state.imageSelection.delete(imageId);
       state.imageTotal = Math.max(0, state.imageTotal - 1);
       state.imageTotalBytes = Math.max(0, state.imageTotalBytes - image.size);
       state.workflowMessage = `${image.originalName} deleted from the image library.`;
@@ -744,23 +1075,172 @@
     if (state.currentView === "image-library") renderImageLibrary();
   }
 
-  async function saveImageSelection() {
+  async function saveImageSelection(nextView = "") {
     const campaign = getActiveCampaign();
-    const imageIds = [...root.querySelectorAll("[data-library-image-id]:checked")].map(input => input.dataset.libraryImageId);
-    const button = root.querySelector('[data-ah-action="save-image-selection"]');
-    button.disabled = true;
+    const imageIds = [...state.imageSelection];
+    const button = root.querySelector(`[data-ah-action="${nextView ? "save-image-selection-and-match" : "save-image-selection"}"]`);
+    if (button) button.disabled = true;
     try {
       const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
         method: "PATCH",
         body: JSON.stringify({ imageIds, currentStep: 5 })
       });
       Object.assign(campaign, updated);
-      await loadImageLibrary();
+      state.imageSelection = new Set(updated.imageIds || []);
       state.workflowMessage = `${imageIds.length} image${imageIds.length === 1 ? "" : "s"} saved to this campaign.`;
+      if (nextView) {
+        state.imageFolder = "";
+        state.imageSearch = "";
+        showView(nextView, "Images saved. Build a unique URL and image matching plan.");
+        return;
+      }
     } catch (error) {
       state.workflowMessage = error.message;
     }
     if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function buildMatchingPlan() {
+    const campaign = getActiveCampaign();
+    const button = root.querySelector('[data-ah-action="build-matching-plan"]');
+    if (button) button.disabled = true;
+    state.workflowMessage = "Building unique Page, URL, and image assignments…";
+    try {
+      const result = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/match-resources`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      Object.assign(campaign, result.campaign);
+      state.workflowMessage = `${result.resourceCoverage.roundCount} matching round${result.resourceCoverage.roundCount === 1 ? "" : "s"} created. Every selected URL and image is included.`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "smart-matching") renderSmartMatching();
+  }
+
+  async function saveAiSettings() {
+    const campaign = getActiveCampaign();
+    const form = root.querySelector("#ah-ai-settings-form");
+    const button = form?.querySelector('button[type="submit"]');
+    if (!form) return;
+    const aiSettings = collectAiSettings(form);
+    if (button) button.disabled = true;
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ aiSettings, currentStep: 7 })
+      });
+      Object.assign(campaign, updated);
+      state.aiSettingsDraft = null;
+      state.workflowMessage = "AI settings saved. Caption generation remains manual.";
+      showView("publishing-settings");
+    } catch (error) {
+      state.aiSettingsDraft = aiSettings;
+      state.workflowMessage = error.message;
+      if (state.currentView === "ai-settings") renderAiSettings();
+    }
+  }
+
+  async function generateAiRound() {
+    const campaign = getActiveCampaign();
+    const form = root.querySelector("#ah-ai-settings-form");
+    const button = root.querySelector('[data-ah-action="generate-ai-round"]');
+    if (!form || !button) return;
+    const roundIndex = Number(root.querySelector("#ah-ai-round").value);
+    const settings = collectAiSettings(form);
+    button.disabled = true;
+    button.textContent = "Generating…";
+    state.workflowMessage = "Generating captions for this round. This may take a little while…";
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/generate`, {
+        method: "POST",
+        body: JSON.stringify({ roundIndex, settings })
+      });
+      Object.assign(campaign, updated);
+      state.aiSettingsDraft = null;
+      state.workflowMessage = `Captions generated for round ${roundIndex + 1}. Review and approve posts below.`;
+    } catch (error) {
+      state.aiSettingsDraft = settings;
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "ai-settings") renderAiSettings();
+  }
+
+  async function togglePostApproval(contentId, status) {
+    const campaign = getActiveCampaign();
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/${encodeURIComponent(contentId)}/approval`, {
+        method: "PATCH",
+        body: JSON.stringify({ status })
+      });
+      Object.assign(campaign, updated);
+      state.workflowMessage = status === "approved" ? "Post approved." : "Post returned to draft.";
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "ai-settings") renderAiSettings();
+  }
+
+  async function savePublishingSettings() {
+    const campaign = getActiveCampaign();
+    const form = root.querySelector("#ah-publishing-settings-form");
+    const button = form?.querySelector('button[type="submit"]');
+    if (!form) return;
+    const publishingSettings = collectPublishingSettings(form);
+    if (button) button.disabled = true;
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ publishingSettings, currentStep: 8 })
+      });
+      Object.assign(campaign, updated);
+      state.publishingSettingsDraft = updated.publishingSettings;
+      state.workflowMessage = "Publishing settings saved. No posts have been scheduled or published.";
+    } catch (error) {
+      state.publishingSettingsDraft = publishingSettings;
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "publishing-settings") renderPublishingSettings();
+  }
+
+  function updatePostingTimes(action, control) {
+    const form = root.querySelector("#ah-publishing-settings-form");
+    if (!form) return;
+    const settings = collectPublishingSettings(form);
+    if (action === "add-posting-time") {
+      const time = root.querySelector("#ah-posting-time").value;
+      const target = root.querySelector("#ah-posting-day").value;
+      const { start, end } = settings.allowedHours;
+      if (!time || time < start || time > end) {
+        state.workflowMessage = "Choose a posting time inside the allowed publishing hours.";
+        state.publishingSettingsDraft = settings;
+        renderPublishingSettings();
+        return;
+      }
+      const days = target === "Everyday"
+        ? ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", ...(settings.weekendPublishing ? ["Saturday", "Sunday"] : [])]
+        : [target];
+      for (const day of days) {
+        const daySettings = settings.scheduleDays[day];
+        if (!daySettings.times.includes(time)) daySettings.times.push(time);
+        daySettings.times.sort();
+        daySettings.enabled = true;
+      }
+      state.workflowMessage = `${time} added to ${target === "Everyday" ? "eligible days" : target}.`;
+    } else if (action === "remove-posting-time") {
+      settings.scheduleDays[control.dataset.day].times =
+        settings.scheduleDays[control.dataset.day].times.filter(time => time !== control.dataset.time);
+      if (!settings.scheduleDays[control.dataset.day].times.length) settings.scheduleDays[control.dataset.day].enabled = false;
+      state.workflowMessage = "Posting time removed.";
+    } else if (action === "clear-posting-times") {
+      for (const day of Object.values(settings.scheduleDays)) {
+        day.enabled = false;
+        day.times = [];
+      }
+      state.workflowMessage = "All weekly posting times cleared.";
+    }
+    state.publishingSettingsDraft = settings;
+    renderPublishingSettings();
   }
 
   function showView(view, notice = "") {
@@ -772,7 +1252,23 @@
     else if (view === "facebook-pages") void loadFacebookPages();
     else if (view === "url-library") renderUrlLibrary();
     else if (view === "image-library") void loadImageLibrary();
+    else if (view === "smart-matching") {
+      renderSmartMatching();
+      void loadImageLibrary();
+    } else if (view === "ai-settings") {
+      renderAiSettings();
+      void loadImageLibrary();
+    } else if (view === "publishing-settings") renderPublishingSettings();
     else renderComingSoon(view);
+  }
+
+  function getResumeView(campaign) {
+    if (campaign.currentStep >= 8) return "publishing-settings";
+    if (campaign.currentStep >= 7) return "ai-settings";
+    if (campaign.currentStep >= 6) return "smart-matching";
+    if (campaign.currentStep >= 5) return "image-library";
+    if (campaign.currentStep >= 4) return "url-library";
+    return "facebook-pages";
   }
 
   async function saveCampaign(form) {
@@ -802,6 +1298,12 @@
       });
       state.campaigns.unshift(campaign);
       state.activeCampaignId = campaign.id;
+      state.imageSelectionCampaignId = "";
+      state.imageFolder = "";
+      state.imageSearch = "";
+      state.discoverySearch = "";
+      state.aiSettingsDraft = null;
+      state.publishingSettingsDraft = null;
       state.workflowMessage = "Campaign saved as a draft. Select the Pages that are authorized to publish.";
       showView("facebook-pages");
     } catch (saveError) {
@@ -827,9 +1329,18 @@
     else if (action === "continue-campaign" || action === "choose-campaign") {
       state.activeCampaignId = control.dataset.campaignId;
       const campaign = getActiveCampaign();
+      state.imageSelectionCampaignId = "";
+      state.imageFolder = "";
+      state.imageSearch = "";
+      state.discoveredArticles = [];
+      state.discoverySearch = "";
+      state.discoveryWarnings = [];
+      state.discoveryTruncated = false;
+      state.aiSettingsDraft = null;
+      state.publishingSettingsDraft = null;
       const view = action === "choose-campaign"
         ? control.dataset.view
-        : (campaign.currentStep >= 4 ? "url-library" : "facebook-pages");
+        : getResumeView(campaign);
       showView(view);
     } else if (action === "reload-pages") {
       void loadFacebookPages();
@@ -841,7 +1352,7 @@
     } else if (action === "discover-articles") {
       void discoverArticles();
     } else if (action === "select-discovered") {
-      root.querySelectorAll("[data-discovery-index]").forEach(input => { input.checked = true; });
+      root.querySelectorAll("[data-discovery-row]:not([hidden]) [data-discovery-index]").forEach(input => { input.checked = true; });
     } else if (action === "add-discovered") {
       const selected = [...root.querySelectorAll("[data-discovery-index]:checked")]
         .map(input => state.discoveredArticles[Number(input.dataset.discoveryIndex)])
@@ -889,6 +1400,50 @@
       void deleteImage(control.dataset.imageId);
     } else if (action === "save-image-selection") {
       void saveImageSelection();
+    } else if (action === "save-image-selection-and-match") {
+      void saveImageSelection("smart-matching");
+    } else if (action === "open-image-folder") {
+      state.imageFolder = control.dataset.folderPath || "";
+      state.imageSearch = "";
+      renderImageLibrary();
+    } else if (action === "select-visible-images") {
+      root.querySelectorAll("[data-image-card]:not([hidden]) [data-library-image-id]").forEach(input => {
+        input.checked = true;
+        state.imageSelection.add(input.dataset.libraryImageId);
+      });
+      const count = root.querySelector("#ah-image-selection-count");
+      if (count) count.textContent = `${state.imageSelection.size} image${state.imageSelection.size === 1 ? "" : "s"} selected for ${getActiveCampaign().campaignName}`;
+    } else if (action === "select-all-images") {
+      state.imageAssets.forEach(image => state.imageSelection.add(image.id));
+      renderImageLibrary();
+    } else if (action === "build-matching-plan") {
+      void buildMatchingPlan();
+    } else if (action === "continue-ai-settings") {
+      showView("ai-settings");
+    } else if (action === "generate-ai-round") {
+      void generateAiRound();
+    } else if (action === "toggle-post-approval") {
+      void togglePostApproval(control.dataset.contentId, control.dataset.nextStatus);
+    } else if (action === "add-posting-time" || action === "remove-posting-time" || action === "clear-posting-times") {
+      updatePostingTimes(action, control);
+    }
+  });
+
+  root.addEventListener("input", event => {
+    const target = event.target;
+    if (target.id === "ah-image-search") {
+      const term = target.value.trim().toLowerCase();
+      state.imageSearch = target.value;
+      const prefix = state.imageFolder ? `${state.imageFolder}/` : "";
+      root.querySelectorAll("[data-image-card]").forEach(card => {
+        const path = card.dataset.folderPath || "";
+        const inScope = term
+          ? (!state.imageFolder || path === state.imageFolder || path.startsWith(prefix))
+          : path === state.imageFolder;
+        card.hidden = !inScope || !card.dataset.searchText.includes(term);
+      });
+      const emptyState = root.querySelector("[data-image-empty]");
+      if (emptyState) emptyState.hidden = [...root.querySelectorAll("[data-image-card]")].some(card => !card.hidden);
     }
   });
 
@@ -909,13 +1464,39 @@
       const imageId = target.dataset.imageReplacement;
       target.value = "";
       void replaceImage(imageId, file);
+    } else if (target.matches("[data-library-image-id]")) {
+      if (target.checked) state.imageSelection.add(target.dataset.libraryImageId);
+      else state.imageSelection.delete(target.dataset.libraryImageId);
+      const count = root.querySelector("#ah-image-selection-count");
+      if (count) count.textContent = `${state.imageSelection.size} image${state.imageSelection.size === 1 ? "" : "s"} selected for ${getActiveCampaign().campaignName}`;
+    } else if (target.matches("[data-schedule-day]")) {
+      const form = root.querySelector("#ah-publishing-settings-form");
+      if (form) {
+        const settings = collectPublishingSettings(form);
+        const day = target.dataset.scheduleDay;
+        settings.scheduleDays[day].enabled = target.checked;
+        if (target.checked && !settings.scheduleDays[day].times.length) {
+          settings.scheduleDays[day].times = [settings.allowedHours.start || "09:00"];
+        }
+        state.publishingSettingsDraft = settings;
+        renderPublishingSettings();
+      }
     }
   });
 
   root.addEventListener("submit", event => {
-    if (event.target.id !== "ah-campaign-form") return;
-    event.preventDefault();
-    void saveCampaign(event.target);
+    if (event.target.id === "ah-campaign-form") {
+      event.preventDefault();
+      void saveCampaign(event.target);
+    } else if (event.target.id === "ah-ai-settings-form") {
+      event.preventDefault();
+      void saveAiSettings();
+    } else if (event.target.id === "ah-publishing-settings-form") {
+      event.preventDefault();
+      void savePublishingSettings();
+    } else {
+      return;
+    }
   });
 
   async function loadCampaigns() {
@@ -931,6 +1512,8 @@
     else if (state.currentView === "facebook-pages") void loadFacebookPages();
     else if (state.currentView === "url-library") renderUrlLibrary();
     else if (state.currentView === "image-library") void loadImageLibrary();
+    else if (state.currentView === "smart-matching" || state.currentView === "ai-settings") void loadImageLibrary();
+    else if (state.currentView === "publishing-settings") renderPublishingSettings();
   }
 
   showView("overview");

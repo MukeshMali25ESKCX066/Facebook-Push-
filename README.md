@@ -8,7 +8,7 @@ PageCrew is organized as a frontend/backend project:
 - `backend/dist/services/ai-content.js` and `frontend/public/ai-content.*` implement the campaign AI content workflow.
 - `backend/dist/services/scheduler-core.js`, `backend/dist/routes/scheduler.js`, and `frontend/public/scheduler.*` implement event-based, per-Page scheduling, calendar review, and publishing controls.
 - `backend/dist/services/analytics-core.js`, `backend/dist/services/analytics-integrations.js`, `backend/dist/routes/analytics.js`, and `frontend/public/analytics.*` implement PageCrew publishing analytics, optional GA4 traffic sync, reports, and reviewed optimization suggestions.
-- `frontend/public/advanced-hybrid.*`, `backend/dist/routes/automatic-campaigns.js`, and `backend/dist/routes/media-library.js` provide the Advanced Hybrid campaign flow: draft setup, authorized Facebook Page selection, article URL imports, and workspace-scoped campaign images.
+- `frontend/public/advanced-hybrid.*`, `backend/dist/routes/automatic-campaigns.js`, and `backend/dist/routes/media-library.js` provide the Automatic Auto Publishing campaign flow: draft setup, authorized Facebook Page selection, article URL imports, workspace-scoped campaign images, smart resource matching, AI caption drafts, and publishing settings.
 
 ## Run locally
 
@@ -17,7 +17,7 @@ PageCrew is organized as a frontend/backend project:
 3. In a separate terminal at the project root, run `python serve-pagecrew.py`.
 4. Open <http://127.0.0.1:5173>.
 
-Open <http://127.0.0.1:5173/advanced-hybrid> for Automatic Auto Publishing. The workflow supports campaign drafts, Facebook Page permission checks, pasted URLs, CSV/XLSX imports, and same-site homepage/sitemap discovery (up to 200 URLs per scan). Step 5 provides single, multiple, folder, and ZIP image uploads, previews, categories, tags, replacement/deletion, campaign selection, and usage history. The image library accepts JPG/JPEG, PNG, and WEBP, with a 500-image/1 GB workspace limit, 8 MB per image, and 200 images/100 MB expanded per ZIP.
+Open <http://127.0.0.1:5173/advanced-hybrid> for Automatic Auto Publishing. The workflow supports campaign drafts, Facebook Page permission checks, pasted URLs, CSV/XLSX imports, and same-site homepage/sitemap discovery (up to 200 URLs per scan), with URL search after discovery. Step 5 provides single, multiple, folder, and ZIP image uploads, previews, folder-wise browsing and selection, categories, tags, replacement/deletion, campaign selection, and usage history. The image library accepts JPG/JPEG, PNG, and WEBP, with a 500-image/1 GB workspace limit, 8 MB per image, and 200 images/100 MB expanded per ZIP. Step 6 builds a plan that uses every selected URL and image, keeps each Page's resources unique within a round, and avoids prior Page/URL/image combinations when possible. Step 7 saves AI caption preferences and generates drafts only when requested. Step 8 saves weekly posting times, per-Page intervals and limits, timezones, approval, weekend, and retry settings; saving the configuration does not start publishing.
 
 Campaigns, generated content, settings, provider usage, and generation errors are stored in encrypted persistence. Configure optional `GEMINI_*_USD_*` and `OPENAI_*_USD_*` rate values using current provider pricing to record estimated USD costs; estimates are omitted when rates are unset.
 
