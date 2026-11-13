@@ -7,6 +7,11 @@
     activeCampaignId: "",
     pages: [],
     pageErrors: [],
+    imageAssets: [],
+    imageTotal: 0,
+    imageTotalBytes: 0,
+    imageLimits: {},
+    imageLoadError: "",
     discoveredArticles: [],
     discoveryWarnings: [],
     discoveryTruncated: false,
@@ -43,6 +48,15 @@
       if (active) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     });
+    const stage = document.querySelector(".ah-stage-badge");
+    const stages = {
+      overview: "Step 1 · Dashboard",
+      "create-campaign": "Step 2 · Create Campaign",
+      "facebook-pages": "Step 3 · Select Facebook Pages",
+      "url-library": "Step 4 · Add Article URLs",
+      "image-library": "Step 5 · Upload Images"
+    };
+    if (stage && stages[view]) stage.textContent = stages[view];
   }
 
   function formatDate(value) {
@@ -314,7 +328,66 @@
           <p class="ah-help-text">Paste multiple URLs one per line. Files may contain one URL column; up to 200 URLs and 3 MB per upload.</p>
         </section>
         <div class="ah-article-list">${articleRows || `<div class="ah-empty">No article URLs added yet.</div>`}</div>
-        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected</span><button type="button" class="ah-button" data-ah-action="save-articles">Save Article List</button></div>
+        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Article List</button><button type="button" class="ah-button" data-ah-action="save-articles-and-images">Continue to Upload Images</button></div></div>
+      </section>`;
+  }
+
+  function formatFileSize(value) {
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function renderImageLibrary() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("image-library");
+      return;
+    }
+    const selectedIds = new Set(campaign.imageIds || []);
+    const imageCards = state.imageAssets.map(image => {
+      const history = (image.usageHistory || []).map(entry => `
+        <li>${escapeHtml(entry.campaignName)} · ${entry.removedAt ? "Previously used" : "In use"}</li>`).join("");
+      return `<article class="ah-image-card" data-image-card="${escapeHtml(image.id)}">
+        <label class="ah-image-preview">
+          <input type="checkbox" data-library-image-id="${escapeHtml(image.id)}" ${selectedIds.has(image.id) ? "checked" : ""} aria-label="Select ${escapeHtml(image.originalName)} for this campaign">
+          <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.originalName)}" loading="lazy">
+        </label>
+        <div class="ah-image-card-heading"><strong>${escapeHtml(image.originalName)}</strong><small>${escapeHtml(formatFileSize(image.size))} · ${image.width} × ${image.height}</small></div>
+        <div class="ah-image-fields">
+          <label>Category<input type="text" data-image-category maxlength="60" value="${escapeHtml(image.category)}"></label>
+          <label>Tags<input type="text" data-image-tags maxlength="840" value="${escapeHtml((image.tags || []).join(", "))}" placeholder="festival, greeting"></label>
+          <button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-metadata" data-image-id="${escapeHtml(image.id)}">Save details</button>
+        </div>
+        <div class="ah-image-history"><strong>Usage history</strong>${history ? `<ul>${history}</ul>` : `<span>Not used in a campaign yet.</span>`}</div>
+        <div class="ah-image-actions">
+          <label class="ah-button ah-button-secondary ah-file-button">Replace image<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" data-image-replacement="${escapeHtml(image.id)}"></label>
+          <button type="button" class="ah-button ah-button-danger" data-ah-action="delete-image" data-image-id="${escapeHtml(image.id)}">Delete</button>
+        </div>
+      </article>`;
+    }).join("");
+    const maxImages = state.imageLimits.maxImages || 500;
+    const maxBytes = state.imageLimits.maxBytes || 1024 * 1024 * 1024;
+    root.innerHTML = `
+      ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 5 · Upload Images</p><h2>Campaign image library</h2><p>Upload individual images, select several, add a whole folder, or import a ZIP archive.</p></div></div>
+        <section class="ah-import-card">
+          <div class="ah-media-upload-grid">
+            <label class="ah-field">Category for new uploads<input id="ah-image-category" type="text" maxlength="60" placeholder="e.g. Diwali"></label>
+            <label class="ah-field">Tags for new uploads<input id="ah-image-tags" type="text" maxlength="840" placeholder="festival, greeting, 2026"></label>
+          </div>
+          <div class="ah-import-controls ah-media-upload-controls">
+            <label class="ah-button ah-button-secondary ah-file-button">Select images<input id="ah-image-files" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" multiple></label>
+            <label class="ah-button ah-button-secondary ah-file-button">Select folder<input id="ah-image-folder" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" webkitdirectory directory multiple></label>
+            <label class="ah-button ah-button-secondary ah-file-button">Upload ZIP<input id="ah-image-zip" type="file" accept=".zip,application/zip,application/x-zip-compressed"></label>
+          </div>
+          <p class="ah-help-text">JPG, JPEG, PNG, and WEBP. Up to ${maxImages} images and ${formatFileSize(maxBytes)} per workspace; each image up to 8 MB. ZIPs can contain up to 200 images and expand to 100 MB.</p>
+        </section>
+        <div class="ah-image-library-summary">${state.imageTotal} / ${maxImages} images · ${formatFileSize(state.imageTotalBytes)} / ${formatFileSize(maxBytes)}</div>
+        ${state.imageAssets.length ? `<div class="ah-image-library-grid">${imageCards}</div>` : `<div class="ah-empty">No images uploaded yet. Select images, a folder, or a ZIP archive to get started.</div>`}
+        <div class="ah-workflow-footer"><span>${selectedIds.size} image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><button type="button" class="ah-button" data-ah-action="save-image-selection">Save selected images to campaign</button></div>
       </section>`;
   }
 
@@ -451,19 +524,27 @@
     }
   }
 
-  async function saveArticleUrls() {
+  async function saveArticleUrls(nextView = "") {
     const campaign = getActiveCampaign();
-    const button = root.querySelector('[data-ah-action="save-articles"]');
+    const button = root.querySelector(nextView
+      ? '[data-ah-action="save-articles-and-images"]'
+      : '[data-ah-action="save-articles"]');
     button.disabled = true;
+    let saved = false;
     try {
       const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
         method: "PATCH",
-        body: JSON.stringify({ articleUrls: campaign.articleUrls || [], currentStep: 4 })
+        body: JSON.stringify({ articleUrls: campaign.articleUrls || [], currentStep: Math.max(Number(campaign.currentStep || 3), 4) })
       });
       Object.assign(campaign, updated);
       state.workflowMessage = "Article list saved to this campaign draft.";
+      saved = true;
     } catch (error) {
       state.workflowMessage = error.message;
+    }
+    if (saved && nextView) {
+      showView(nextView, "Article list saved. Continue with campaign images.");
+      return;
     }
     if (state.currentView === "url-library" && state.activeCampaignId === campaign.id) renderUrlLibrary();
   }
@@ -522,6 +603,166 @@
     if (state.currentView === "url-library" && state.activeCampaignId === campaign.id) renderUrlLibrary();
   }
 
+  async function loadImageLibrary() {
+    try {
+      const result = await request("/api/media-library");
+      state.imageAssets = result.images || [];
+      state.imageTotal = Number(result.total || 0);
+      state.imageTotalBytes = Number(result.totalBytes || 0);
+      state.imageLimits = result.limits || {};
+      state.imageLoadError = "";
+    } catch (error) {
+      state.imageLoadError = error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  function getImageUploadDetails() {
+    return {
+      category: root.querySelector("#ah-image-category")?.value || "",
+      tags: root.querySelector("#ah-image-tags")?.value || ""
+    };
+  }
+
+  async function uploadImageFiles(files) {
+    const supported = files.filter(file => /\.(?:jpe?g|png|webp)$/i.test(file.name));
+    let skipped = files.length - supported.length;
+    if (!supported.length) {
+      state.workflowMessage = "The selected folder has no JPG, PNG, or WEBP images.";
+      renderImageLibrary();
+      return;
+    }
+    const maxImages = state.imageLimits.maxImages || 500;
+    if (state.imageTotal + supported.length > maxImages) {
+      state.workflowMessage = `This upload would exceed the ${maxImages}-image workspace limit.`;
+      renderImageLibrary();
+      return;
+    }
+    const { category, tags } = getImageUploadDetails();
+    let uploaded = 0;
+    try {
+      for (let offset = 0; offset < supported.length; offset += 10) {
+        const batch = supported.slice(offset, offset + 10);
+        const formData = new FormData();
+        formData.append("category", category);
+        formData.append("tags", tags);
+        for (const file of batch) {
+          formData.append("files", file, file.webkitRelativePath || file.name);
+        }
+        state.workflowMessage = `Uploading images ${Math.min(offset + batch.length, supported.length)} of ${supported.length}…`;
+        renderImageLibrary();
+        const result = await request("/api/media-library/upload", { method: "POST", body: formData });
+        uploaded += (result.images || []).length;
+        skipped += Number(result.skipped || 0);
+        state.imageAssets = [...(result.images || []), ...state.imageAssets];
+        state.imageTotal = Number(result.total || state.imageTotal + (result.images || []).length);
+        state.imageTotalBytes += (result.images || []).reduce((total, image) => total + image.size, 0);
+      }
+      state.workflowMessage = `${uploaded} image${uploaded === 1 ? "" : "s"} uploaded.${skipped ? ` ${skipped} unsupported folder file${skipped === 1 ? " was" : "s were"} skipped.` : ""}`;
+    } catch (error) {
+      await loadImageLibrary();
+      state.workflowMessage = uploaded
+        ? `${uploaded} images uploaded before the next batch failed: ${error.message}`
+        : error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function uploadImageZip(file) {
+    if (!file) return;
+    const { category, tags } = getImageUploadDetails();
+    const formData = new FormData();
+    formData.append("category", category);
+    formData.append("tags", tags);
+    formData.append("file", file);
+    state.workflowMessage = "Reading ZIP archive…";
+    renderImageLibrary();
+    try {
+      const result = await request("/api/media-library/upload-zip", { method: "POST", body: formData });
+      state.imageAssets = [...(result.images || []), ...state.imageAssets];
+      state.imageTotal = Number(result.total || state.imageTotal + (result.images || []).length);
+      state.imageTotalBytes += (result.images || []).reduce((total, image) => total + image.size, 0);
+      state.workflowMessage = `${(result.images || []).length} images imported from ZIP.${result.skipped ? ` ${result.skipped} non-image files were skipped.` : ""}`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function saveImageMetadata(imageId) {
+    const card = root.querySelector(`[data-image-card="${CSS.escape(imageId)}"]`);
+    if (!card) return;
+    try {
+      const image = await request(`/api/media-library/${encodeURIComponent(imageId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          category: card.querySelector("[data-image-category]").value,
+          tags: card.querySelector("[data-image-tags]").value
+        })
+      });
+      state.imageAssets = state.imageAssets.map(item => item.id === image.id ? image : item);
+      state.workflowMessage = `${image.originalName} details saved.`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function replaceImage(imageId, file) {
+    const previousImage = state.imageAssets.find(item => item.id === imageId);
+    const formData = new FormData();
+    formData.append("file", file);
+    state.workflowMessage = "Replacing image…";
+    renderImageLibrary();
+    try {
+      const image = await request(`/api/media-library/${encodeURIComponent(imageId)}/replace`, {
+        method: "POST",
+        body: formData
+      });
+      state.imageAssets = state.imageAssets.map(item => item.id === image.id ? image : item);
+      state.imageTotalBytes += image.size - (previousImage?.size || 0);
+      state.workflowMessage = `${image.originalName} replaced.`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+      await loadImageLibrary();
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function deleteImage(imageId) {
+    const image = state.imageAssets.find(item => item.id === imageId);
+    if (!image) return;
+    try {
+      await request(`/api/media-library/${encodeURIComponent(imageId)}`, { method: "DELETE" });
+      state.imageAssets = state.imageAssets.filter(item => item.id !== imageId);
+      state.imageTotal = Math.max(0, state.imageTotal - 1);
+      state.imageTotalBytes = Math.max(0, state.imageTotalBytes - image.size);
+      state.workflowMessage = `${image.originalName} deleted from the image library.`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
+  async function saveImageSelection() {
+    const campaign = getActiveCampaign();
+    const imageIds = [...root.querySelectorAll("[data-library-image-id]:checked")].map(input => input.dataset.libraryImageId);
+    const button = root.querySelector('[data-ah-action="save-image-selection"]');
+    button.disabled = true;
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ imageIds, currentStep: 5 })
+      });
+      Object.assign(campaign, updated);
+      await loadImageLibrary();
+      state.workflowMessage = `${imageIds.length} image${imageIds.length === 1 ? "" : "s"} saved to this campaign.`;
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "image-library") renderImageLibrary();
+  }
+
   function showView(view, notice = "") {
     setActiveModule(view);
     if (notice) state.workflowMessage = notice;
@@ -530,6 +771,7 @@
     else if (view === "campaign-manager") renderCampaignManager(notice);
     else if (view === "facebook-pages") void loadFacebookPages();
     else if (view === "url-library") renderUrlLibrary();
+    else if (view === "image-library") void loadImageLibrary();
     else renderComingSoon(view);
   }
 
@@ -639,12 +881,34 @@
       void fetchArticleMetadata(Number(control.dataset.articleIndex));
     } else if (action === "save-articles") {
       void saveArticleUrls();
+    } else if (action === "save-articles-and-images") {
+      void saveArticleUrls("image-library");
+    } else if (action === "save-image-metadata") {
+      void saveImageMetadata(control.dataset.imageId);
+    } else if (action === "delete-image") {
+      void deleteImage(control.dataset.imageId);
+    } else if (action === "save-image-selection") {
+      void saveImageSelection();
     }
   });
 
   root.addEventListener("change", event => {
-    if (event.target.id === "ah-url-file" && event.target.files[0]) {
-      void importArticleFile(event.target.files[0]);
+    const target = event.target;
+    if (target.id === "ah-url-file" && target.files[0]) {
+      void importArticleFile(target.files[0]);
+    } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {
+      const files = [...target.files];
+      target.value = "";
+      void uploadImageFiles(files);
+    } else if (target.id === "ah-image-zip" && target.files[0]) {
+      const file = target.files[0];
+      target.value = "";
+      void uploadImageZip(file);
+    } else if (target.matches("[data-image-replacement]") && target.files[0]) {
+      const file = target.files[0];
+      const imageId = target.dataset.imageReplacement;
+      target.value = "";
+      void replaceImage(imageId, file);
     }
   });
 
@@ -666,6 +930,7 @@
     else if (state.currentView === "campaign-manager") renderCampaignManager();
     else if (state.currentView === "facebook-pages") void loadFacebookPages();
     else if (state.currentView === "url-library") renderUrlLibrary();
+    else if (state.currentView === "image-library") void loadImageLibrary();
   }
 
   showView("overview");

@@ -7,10 +7,13 @@ const multer = require("multer");
 const ExcelJS = require("exceljs");
 const auth = require("./auth.js");
 const pages = require("./pages.js");
+const mediaLibrary = require("../services/media-library-store.js");
 const { parseHttpUrl, isPrivateAddress } = require("../services/public-url.js");
 
 const router = Router();
 const campaigns = [];
+exports.getAutomaticCampaignsForWorkspace = workspaceScopeId =>
+    campaigns.filter(campaign => campaign.workspaceScopeId === workspaceScopeId);
 const persistCampaigns = require("../persist.js")("automaticCampaigns", () => campaigns, data => {
     if (Array.isArray(data)) campaigns.splice(0, campaigns.length, ...data);
 });
@@ -119,6 +122,34 @@ function validateArticleUrls(value) {
             status: "Ready"
         };
     });
+}
+
+function buildImageUsageHistory(campaign, imageIds) {
+    const previousIds = new Set(campaign.imageIds || []);
+    const nextIds = new Set(imageIds);
+    const history = (campaign.imageUsageHistory || []).map(entry => ({ ...entry }));
+    const changedAt = new Date().toISOString();
+    for (const imageId of previousIds) {
+        if (nextIds.has(imageId)) continue;
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+            const entry = history[index];
+            if (entry.imageId === imageId && !entry.removedAt) {
+                entry.removedAt = changedAt;
+                break;
+            }
+        }
+    }
+    for (const imageId of nextIds) {
+        if (!previousIds.has(imageId)) {
+            history.push({
+                imageId,
+                campaignName: campaign.campaignName,
+                usedAt: changedAt,
+                removedAt: null
+            });
+        }
+    }
+    return history.slice(-2000);
 }
 
 function parseCsvUrls(text) {
@@ -253,6 +284,8 @@ router.post("/", (req, res) => {
         ...fields,
         pages: [],
         articleUrls: [],
+        imageIds: [],
+        imageUsageHistory: [],
         currentStep: 3,
         status: "draft",
         workspaceScopeId: req.workspaceScopeId,
@@ -284,10 +317,14 @@ router.patch("/:id", (req, res) => {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "articleUrls")) {
             updates.articleUrls = validateArticleUrls(req.body.articleUrls);
         }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "imageIds")) {
+            updates.imageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, req.body.imageIds);
+            updates.imageUsageHistory = buildImageUsageHistory(campaign, updates.imageIds);
+        }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "currentStep")) {
             const step = Number(req.body.currentStep);
-            if (!Number.isInteger(step) || step < 3 || step > 4) throw new Error("Campaign workflow step is invalid.");
-            updates.currentStep = step;
+            if (!Number.isInteger(step) || step < 3 || step > 5) throw new Error("Campaign workflow step is invalid.");
+            updates.currentStep = Math.max(Number(campaign.currentStep || 3), step);
         }
     } catch (error) {
         res.status(400).json({ error: error.message });
