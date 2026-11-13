@@ -632,7 +632,7 @@
       return `<div class="ah-page-setting-row">
         <strong>${escapeHtml(page.name)}</strong>
         <label>Interval (minutes)<input type="number" min="1" max="1440" step="1" data-page-interval="${escapeHtml(page.id)}" value="${escapeHtml(config.intervalMinutes)}"></label>
-        <label>Daily limit<input type="number" min="1" max="20" step="1" data-page-limit="${escapeHtml(page.id)}" value="${escapeHtml(config.dailyPostLimit)}"></label>
+        <label>Daily limit<input type="number" min="1" max="500" step="1" data-page-limit="${escapeHtml(page.id)}" value="${escapeHtml(config.dailyPostLimit)}"></label>
       </div>`;
     }).join("");
     root.innerHTML = `

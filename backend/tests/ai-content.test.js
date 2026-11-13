@@ -47,6 +47,7 @@ test("builds a structured prompt with the campaign brief and selected Pages", ()
     const prompt = aiContent.buildContentPrompt(campaign, pages, aiContent.validateSettings({}));
     assert.equal(prompt.length, 2);
     assert.match(prompt[0].content, /untrusted source data/);
+    assert.match(prompt[0].content, /Never include URLs in the caption or CTA/);
     const input = JSON.parse(prompt[1].content);
     assert.equal(input.brief.articleTitle, campaign.article.title);
     assert.deepEqual(input.pages.map(page => page.pageId), ["page-a", "page-b"]);

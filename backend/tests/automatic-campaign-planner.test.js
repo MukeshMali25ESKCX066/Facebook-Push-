@@ -76,13 +76,19 @@ test("validates the saved publishing schedule and per-Page limits", () => {
         scheduleDays: {
             Monday: { enabled: true, times: ["09:00", "17:00"] }
         },
-        pageSettings: { "page-a": { intervalMinutes: 5, dailyPostLimit: 20 } },
+        pageSettings: { "page-a": { intervalMinutes: 5, dailyPostLimit: 500 } },
         retryAttempts: 3,
         retryDelayMinutes: 5
     }, pages, "UTC");
     assert.equal(result.enabled, false);
     assert.equal(result.pageSettings["page-a"].intervalMinutes, 5);
+    assert.equal(result.pageSettings["page-a"].dailyPostLimit, 500);
     assert.deepEqual(result.pageSettings["page-b"], { intervalMinutes: 120, dailyPostLimit: 4 });
+    assert.throws(() => validatePublishingSettings({
+        timezone: "UTC",
+        allowedHours: { start: "09:00", end: "21:00" },
+        pageSettings: { "page-a": { intervalMinutes: 5, dailyPostLimit: 501 } }
+    }, pages), /between 1 and 500/);
     assert.throws(() => validatePublishingSettings({
         timezone: "Not/A-Timezone",
         allowedHours: { start: "09:00", end: "21:00" }
@@ -218,7 +224,7 @@ test("publishes at fixed five-minute intervals and repeats assigned resources wh
     assert.equal(singlePass.posts.length, 1);
 });
 
-test("publishes article links when captions are missing or awaiting approval", () => {
+test("keeps article URLs out of post copy when captions are missing or awaiting approval", () => {
     const campaign = {
         campaignName: "Rajasthan Events",
         startDate: "2026-11-13",
@@ -261,7 +267,11 @@ test("publishes article links when captions are missing or awaiting approval", (
         now: Date.parse("2026-11-12T00:00:00.000Z")
     });
     assert.ok(schedule.posts.length > 0);
-    assert.ok(schedule.posts.every(post => !post.libraryImageId && post.content.includes("https://example.com/one")));
+    assert.ok(schedule.posts.every(post =>
+        !post.libraryImageId &&
+        !post.content.includes("https://") &&
+        post.utmUrl.includes("utm_source=facebook")
+    ));
     campaign.publishingSettings = settings;
     campaign.aiContent = [];
     const linkOnly = generateAutomaticSchedule({
@@ -270,7 +280,7 @@ test("publishes article links when captions are missing or awaiting approval", (
         now: Date.parse("2026-11-12T00:00:00.000Z")
     });
     assert.ok(linkOnly.posts.length > 0);
-    assert.ok(linkOnly.posts.every(post => !post.libraryImageId));
+    assert.ok(linkOnly.posts.every(post => !post.libraryImageId && !post.content.includes("https://")));
 });
 
 test("enforces Page intervals across adjacent campaign days during DST", () => {

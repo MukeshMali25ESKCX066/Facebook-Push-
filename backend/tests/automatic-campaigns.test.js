@@ -409,7 +409,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const linkOnlyResult = await linkOnlyActivated.json();
         assert.equal(linkOnlyResult.campaign.status, "active");
         assert.equal(linkOnlyResult.schedule.posts.every(post => !post.libraryImageId), true);
-        assert.equal(linkOnlyResult.schedule.posts[0].content.includes("https://example.com/link-only"), true);
+        assert.equal(linkOnlyResult.schedule.posts[0].content.includes("https://"), false);
+        assert.ok(linkOnlyResult.schedule.posts[0].utmUrl.includes("utm_source=facebook"));
         assert.equal(linkOnlyResult.campaign.publishingSettings.enabled, true);
         assert.equal(generationCall, aiCallsBeforeLinkOnlyActivation);
     } finally {

@@ -136,8 +136,8 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
         if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
             throw new Error(`The posting interval for ${page.name || "a Page"} must be between 1 and 1,440 minutes.`);
         }
-        if (!Number.isInteger(dailyPostLimit) || dailyPostLimit < 1 || dailyPostLimit > 20) {
-            throw new Error(`The daily post limit for ${page.name || "a Page"} must be between 1 and 20.`);
+        if (!Number.isInteger(dailyPostLimit) || dailyPostLimit < 1 || dailyPostLimit > 500) {
+            throw new Error(`The daily post limit for ${page.name || "a Page"} must be between 1 and 500.`);
         }
         pageSettings[page.id] = { intervalMinutes, dailyPostLimit };
     }
@@ -334,7 +334,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 hashtags: postContent.hashtags || [],
                 articleUrl,
                 utmUrl,
-                content: schedulerCore.buildCaption(postContent, articleUrl, utmUrl),
+                content: schedulerCore.buildCaption(postContent),
                 libraryImageId: postContent.imageId,
                 imageId: "",
                 postType: campaign.campaignType || "Campaign",

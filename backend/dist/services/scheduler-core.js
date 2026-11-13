@@ -91,18 +91,26 @@ function makeTrackingUrl(articleUrl, campaignName, pageId, contentId) {
     return url.toString();
 }
 
-function buildCaption(content, articleUrl, trackingUrl) {
-    let caption = String(content.caption || "").trim();
-    const cta = String(content.cta || "").trim();
+function removeCaptionUrls(value) {
+    return String(value || "")
+        .replace(/(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi, "")
+        .replace(/\s+(?:at|via|here|this link)\s*$/i, "")
+        .replace(/[ \t]*[,;:]\s*$/, "")
+        .trim();
+}
+
+function buildCaption(content) {
+    let caption = removeCaptionUrls(content.caption);
+    const cta = removeCaptionUrls(content.cta);
     const hashtags = Array.isArray(content.hashtags) ? content.hashtags.join(" ") : "";
     if (cta && !caption.includes(cta)) caption = `${caption}\n\n${cta}`;
     const missingHashtags = hashtags.split(/\s+/).filter(tag => tag && !caption.includes(tag));
     if (missingHashtags.length) caption = `${caption}\n\n${missingHashtags.join(" ")}`;
-    if (articleUrl && trackingUrl) {
-        if (caption.includes(articleUrl)) caption = caption.split(articleUrl).join(trackingUrl);
-        else caption = `${caption}\n\n${trackingUrl}`;
-    }
-    return caption.trim();
+    return caption
+        .replace(/(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi, "")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
 }
 
 function getPostType(date, eventDate, index) {
@@ -129,8 +137,8 @@ function makePageSlots(pageConfig, startDate, endDate, postingDays, windowName, 
     const timezone = validateTimeZone(pageConfig.timezone);
     const limit = Number(pageConfig.dailyPostLimit);
     const gap = Number(pageConfig.minimumGapMinutes);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
-        throw new Error("Daily post limit must be between 1 and 20 for each Page.");
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+        throw new Error("Daily post limit must be between 1 and 500 for each Page.");
     }
     if (!Number.isInteger(gap) || gap < 30 || gap > 1440) {
         throw new Error("Minimum gap must be between 30 and 1,440 minutes.");
@@ -233,7 +241,7 @@ function generateSchedule({ campaign, settings, pageSettings, approvedContent, i
                 hashtags: content.hashtags || [],
                 articleUrl,
                 utmUrl,
-                content: buildCaption(content, articleUrl, utmUrl),
+                content: buildCaption(content),
                 imageId: content.selectedImageId || "",
                 postType,
                 purpose: getPostPurpose(postType),

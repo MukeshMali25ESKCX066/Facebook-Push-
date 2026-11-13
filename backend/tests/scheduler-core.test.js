@@ -58,7 +58,8 @@ test("generates timezone-safe Page-specific slots and tracking URLs", () => {
     assert.ok(firstPost.utmUrl.includes("utm_source=facebook"));
     assert.ok(firstPost.utmUrl.includes("utm_medium=social"));
     assert.ok(firstPost.utmUrl.includes("utm_campaign=thanksgiving-2026"));
-    assert.ok(firstPost.content.includes(firstPost.utmUrl));
+    assert.equal(firstPost.content.includes("https://"), false);
+    assert.equal(firstPost.articleUrl, campaign.articleUrl);
 
     for (const page of result.pages) {
         const pagePosts = result.posts.filter(post => post.pageId === page.pageId);
@@ -69,6 +70,17 @@ test("generates timezone-safe Page-specific slots and tracking URLs", () => {
         }
         assert.ok([...byDay.values()].every(count => count <= page.dailyPostLimit));
     }
+});
+
+test("keeps URLs out of post copy while preserving captions, calls to action, and hashtags", () => {
+    const caption = require("../dist/services/scheduler-core.js").buildCaption({
+        caption: "Read the guide at https://example.com/story",
+        cta: "More details: https://example.com/details",
+        hashtags: ["#Thanksgiving"]
+    });
+
+    assert.equal(caption, "Read the guide\n\nMore details\n\n#Thanksgiving");
+    assert.equal(/(?:https?:\/\/|www\.)/i.test(caption), false);
 });
 
 test("converts local publishing time to the correct UTC instant across DST", () => {
@@ -108,6 +120,39 @@ test("requires approved content and a schedule that fits the Page limits", () =>
         approvedContent: approvedContent.filter(item => item.pageId === "page-a"),
         now: Date.parse("2026-11-20T00:00:00.000Z")
     }), /only 1 slots/);
+});
+
+test("accepts a daily Page limit of 500 and rejects values above it", () => {
+    const result = generateSchedule({
+        campaign,
+        settings: {
+            startDate: "2026-11-24",
+            endDate: "2026-11-26",
+            postingDays: ["Tue", "Wed", "Thu"],
+            postingWindow: "All Day"
+        },
+        pageSettings: {
+            "page-a": { dailyPostLimit: 500, minimumGapMinutes: 30, timezone: "UTC" }
+        },
+        approvedContent: approvedContent.filter(item => item.pageId === "page-a"),
+        now: Date.parse("2026-11-20T00:00:00.000Z")
+    });
+    assert.equal(result.pages[0].dailyPostLimit, 500);
+
+    assert.throws(() => generateSchedule({
+        campaign,
+        settings: {
+            startDate: "2026-11-24",
+            endDate: "2026-11-26",
+            postingDays: ["Tue", "Wed", "Thu"],
+            postingWindow: "All Day"
+        },
+        pageSettings: {
+            "page-a": { dailyPostLimit: 501, minimumGapMinutes: 30, timezone: "UTC" }
+        },
+        approvedContent: approvedContent.filter(item => item.pageId === "page-a"),
+        now: Date.parse("2026-11-20T00:00:00.000Z")
+    }), /between 1 and 500/);
 });
 
 test("automatic publishing queues generated draft content without requiring approval", () => {

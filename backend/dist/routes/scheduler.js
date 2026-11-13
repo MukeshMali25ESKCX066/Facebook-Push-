@@ -553,7 +553,7 @@ router.put("/posts/:id", (req, res) => {
             caption: post.caption,
             cta: post.cta,
             hashtags: post.hashtags
-        }, post.articleUrl, post.utmUrl);
+        });
     }
     if (scheduledAt) post.scheduledAt = scheduledAt;
     if (scheduledAt) {

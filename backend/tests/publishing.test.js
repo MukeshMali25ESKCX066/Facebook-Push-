@@ -7,6 +7,7 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { publishToPage } = require("../dist/services/meta.js");
 const { publishJobToPages } = require("../dist/services/publishing.js");
+const { buildCaption } = require("../dist/services/scheduler-core.js");
 
 test("publishes a text post through the Facebook Page feed", async () => {
     const originalFetch = global.fetch;
@@ -64,7 +65,7 @@ test("uploads a scheduled image with Facebook's scheduling fields", async () => 
     }
 });
 
-test("publishes a campaign image as a clickable article link preview", async () => {
+test("publishes an uploaded campaign image as a clickable link preview without a URL in the caption", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pagecrew-publishing-"));
     const mediaPath = join(directory, "post.png");
     const originalFetch = global.fetch;
@@ -78,7 +79,8 @@ test("publishes a campaign image as a clickable article link preview", async () 
         };
 
         const destinationUrl = "https://example.com/story?utm_source=facebook";
-        const postId = await publishToPage("page-1", "page-token", "Read the story.", {
+        const caption = buildCaption({ caption: "Read the story at https://example.com/story" });
+        const postId = await publishToPage("page-1", "page-token", caption, {
             path: mediaPath,
             mimeType: "image/png",
             originalName: "post.png"
@@ -86,7 +88,8 @@ test("publishes a campaign image as a clickable article link preview", async () 
 
         assert.equal(postId, "linked-photo-post-1");
         assert.equal(request.url, "https://graph.facebook.com/v23.0/page-1/feed");
-        assert.equal(request.options.body.get("message"), "Read the story.");
+        assert.equal(request.options.body.get("message"), "Read the story");
+        assert.equal(request.options.body.get("message").includes("https://"), false);
         assert.equal(request.options.body.get("link"), destinationUrl);
         assert.equal(request.options.body.get("thumbnail").type, "image/png");
         assert.equal(request.options.body.get("access_token"), "page-token");

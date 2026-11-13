@@ -126,7 +126,7 @@
       const config = state.pageSettings[page.id] || {};
       return `<div class="scheduler-page-setting" data-page-setting="${escapeHtml(page.id)}">
         <strong title="${escapeHtml(page.name)}">${escapeHtml(page.name)}</strong>
-        <label>Posts / Page / day<input data-setting="dailyPostLimit" type="number" min="1" max="20" value="${escapeHtml(config.dailyPostLimit || 4)}"></label>
+        <label>Posts / Page / day<input data-setting="dailyPostLimit" type="number" min="1" max="500" value="${escapeHtml(config.dailyPostLimit || 4)}"></label>
         <label>Minimum gap (min)<select data-setting="minimumGapMinutes">${[30, 60, 120, 240].map(value => `<option value="${value}" ${Number(config.minimumGapMinutes || 120) === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
         <label>Page timezone<input data-setting="timezone" value="${escapeHtml(config.timezone || state.campaign.timezone || "UTC")}" placeholder="e.g. America/New_York"></label>
       </div>`;
@@ -161,7 +161,7 @@
               <label class="scheduler-field">Start date<input name="startDate" type="date" value="${escapeHtml(savedSettings.startDate || defaults.startDate)}" required></label>
               <label class="scheduler-field">End date<input name="endDate" type="date" value="${escapeHtml(savedSettings.endDate || defaults.endDate)}" required></label>
               <label class="scheduler-field">Posting window<select name="postingWindow">${["All Day", "Morning", "Afternoon", "Evening"].map(value => `<option ${value === (savedSettings.postingWindow || campaign.postingWindow || "All Day") ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-              <label class="scheduler-field">Default daily Page limit<input name="dailyPostLimit" type="number" min="1" max="20" value="${escapeHtml(savedSettings.dailyPostLimit || 4)}" required></label>
+              <label class="scheduler-field">Default daily Page limit<input name="dailyPostLimit" type="number" min="1" max="500" value="${escapeHtml(savedSettings.dailyPostLimit || 4)}" required></label>
               <label class="scheduler-field">Default minimum gap<select name="minimumGapMinutes">${[30, 60, 120, 240].map(value => `<option value="${value}" ${Number(savedSettings.minimumGapMinutes || 120) === value ? "selected" : ""}>${value} minutes</option>`).join("")}</select></label>
               <label class="scheduler-field">Scheduling mode<select name="schedulingMode"><option value="smart" ${savedSettings.schedulingMode !== "manual" ? "selected" : ""}>Smart Scheduling</option><option value="manual" ${savedSettings.schedulingMode === "manual" ? "selected" : ""}>Manual Scheduling</option></select></label>
             </div>
