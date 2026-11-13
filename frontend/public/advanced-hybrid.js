@@ -99,6 +99,7 @@
     const actionLabel = ["active", "paused"].includes(campaign.status)
       ? "View publishing"
       : campaign.status === "stopped" ? "Manage campaign" : "Continue setup";
+    const canActivate = ["draft", "stopped"].includes(campaign.status);
     return `<article class="ah-campaign-row">
       <div>
         <strong>${escapeHtml(campaign.campaignName)}</strong>
@@ -107,6 +108,7 @@
       <div class="ah-campaign-actions">
         <span class="ah-status">${escapeHtml(campaign.status)}</span>
         ${includeAction ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign" data-campaign-id="${escapeHtml(campaign.id)}">${actionLabel}</button>` : ""}
+        ${includeAction && canActivate ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="review-campaign" data-campaign-id="${escapeHtml(campaign.id)}">Review &amp; Activate</button><button type="button" class="ah-button" data-ah-action="direct-activate" data-campaign-id="${escapeHtml(campaign.id)}">Activate now</button>` : ""}
       </div>
     </article>`;
   }
@@ -610,21 +612,21 @@
   }
 
   function defaultPublishingSettings(campaign) {
-    const times = ["09:00", "12:30", "17:00", "20:00"];
     const scheduleDays = {};
     for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
       const enabled = !["Sunday", "Saturday"].includes(day);
-      scheduleDays[day] = { enabled, times: enabled ? [...times] : [] };
+      scheduleDays[day] = { enabled, times: [] };
     }
     return {
       enabled: false,
       automaticApproval: false,
       roundRobin: true,
+      repeatResources: true,
       timezone: campaign.timezone || "Asia/Kolkata",
       allowedHours: { start: "09:00", end: "21:00" },
       weekendPublishing: false,
       scheduleDays,
-      pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 120, dailyPostLimit: 4 }])),
+      pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 120, dailyPostLimit: 20 }])),
       retryAttempts: 3,
       retryDelayMinutes: 5
     };
@@ -642,14 +644,13 @@
       const daySettings = settings.scheduleDays?.[day] || { enabled: false, times: [] };
       return `<article class="ah-day-card">
         <label class="ah-check-field"><input type="checkbox" data-schedule-day="${day}" ${daySettings.enabled ? "checked" : ""} ${["Sunday", "Saturday"].includes(day) && !settings.weekendPublishing ? "disabled" : ""}>${day}</label>
-        <div class="ah-time-chips">${daySettings.times.map(time => `<span>${escapeHtml(time)}<button type="button" aria-label="Remove ${escapeHtml(time)} on ${day}" data-ah-action="remove-posting-time" data-day="${day}" data-time="${escapeHtml(time)}">×</button></span>`).join("") || `<small>No times added</small>`}</div>
       </article>`;
     }).join("");
     const pageRows = (campaign.pages || []).map(page => {
-      const config = settings.pageSettings?.[page.id] || { intervalMinutes: 120, dailyPostLimit: 4 };
+      const config = settings.pageSettings?.[page.id] || { intervalMinutes: 120, dailyPostLimit: 20 };
       return `<div class="ah-page-setting-row">
         <strong>${escapeHtml(page.name)}</strong>
-        <label>Interval (minutes)<input type="number" min="15" max="1440" step="1" data-page-interval="${escapeHtml(page.id)}" value="${escapeHtml(config.intervalMinutes)}"></label>
+        <label>Interval (minutes)<input type="number" min="1" max="1440" step="1" data-page-interval="${escapeHtml(page.id)}" value="${escapeHtml(config.intervalMinutes)}"></label>
         <label>Daily limit<input type="number" min="1" max="20" step="1" data-page-limit="${escapeHtml(page.id)}" value="${escapeHtml(config.dailyPostLimit)}"></label>
       </div>`;
     }).join("");
@@ -663,22 +664,22 @@
             <label class="ah-check-field"><input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>Enable auto publishing when campaign is explicitly started</label>
             <label class="ah-check-field"><input type="checkbox" name="automaticApproval" ${settings.automaticApproval ? "checked" : ""}>Automatically approve generated posts</label>
             <label class="ah-check-field"><input type="checkbox" name="roundRobin" ${settings.roundRobin !== false ? "checked" : ""}>Round-robin Page selection</label>
+            <label class="ah-check-field"><input type="checkbox" name="repeatResources" ${settings.repeatResources !== false ? "checked" : ""}>Repeat selected URLs and images after the first pass</label>
             <label class="ah-check-field"><input type="checkbox" name="weekendPublishing" ${settings.weekendPublishing ? "checked" : ""}>Allow weekend publishing</label>
           </div>
           <div class="ah-form-grid">
             <label class="ah-field">Timezone<input name="timezone" maxlength="100" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Kolkata" required></label>
-            <label class="ah-field">Allowed hours<input type="time" name="allowedStart" value="${escapeHtml(settings.allowedHours?.start || "09:00")}" required></label>
-            <label class="ah-field">Allowed hours end<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "21:00")}" required></label>
+            <label class="ah-field">Daily starting time<input type="time" name="allowedStart" value="${escapeHtml(settings.allowedHours?.start || "09:00")}" required></label>
+            <label class="ah-field">Daily stop time<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "21:00")}" required></label>
             <label class="ah-field">Retries after first attempt<select name="retryAttempts">${[0, 1, 2, 3, 4, 5].map(value => `<option value="${value}" ${Number(settings.retryAttempts) === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
             <label class="ah-field">Retry delay (minutes)<input type="number" name="retryDelayMinutes" min="1" max="1440" value="${escapeHtml(settings.retryDelayMinutes || 5)}" required></label>
           </div>
           <section class="ah-schedule-editor">
-            <div class="ah-panel-heading"><div><h3>Weekly posting times</h3><p>Choose enabled days and add times inside your allowed-hours range.</p></div><button type="button" class="ah-link-button" data-ah-action="clear-posting-times">Clear all times</button></div>
-            <div class="ah-import-controls"><label class="ah-field">Add time to<select id="ah-posting-day"><option value="Everyday">Every day</option>${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => `<option value="${day}">${day}</option>`).join("")}</select></label><label class="ah-field">Posting time<input id="ah-posting-time" type="time" value="09:00"></label><button type="button" class="ah-button ah-button-secondary" data-ah-action="add-posting-time">Add posting time</button></div>
+            <div class="ah-panel-heading"><div><h3>Publishing days</h3><p>Each enabled day starts at the configured daily starting time.</p></div></div>
             <div class="ah-day-grid">${dayCards}</div>
           </section>
           <section class="ah-page-settings">
-            <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>Configure a minimum interval and daily posting cap independently for each Page.</p></div></div>
+            <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>Posts repeat at the selected interval until the daily stop time or daily limit.</p></div></div>
             ${pageRows || `<div class="ah-empty">Select Facebook Pages before setting Page-specific limits.</div>`}
           </section>
           <div class="ah-form-footer"><span>Auto publishing starts only after a separate campaign-start action.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${canConfigure ? "" : "disabled"}>Save publishing settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Review &amp; Activate →</button></div></div>
@@ -707,6 +708,7 @@
     root.innerHTML = `
       ${state.readinessError ? `<div class="ah-error" role="alert">${escapeHtml(state.readinessError)}</div>` : ""}
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${state.campaigns.length > 1 ? `<label class="ah-review-campaign-picker">Campaign to review<select id="ah-review-campaign">${state.campaigns.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === campaign.id ? "selected" : ""}>${escapeHtml(item.campaignName)} · ${escapeHtml(item.status)}</option>`).join("")}</select></label>` : ""}
       <section class="ah-panel ah-workflow-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 9 · Campaign Review &amp; Activate</p><h2>Review ${escapeHtml(campaign.campaignName)}</h2><p>Activation queues approved posts in the durable scheduler. Posts publish to Facebook only at the displayed future times.</p></div><span class="ah-status ${readiness?.ready ? "ah-status-ready" : ""}">${readiness?.ready ? "Ready" : escapeHtml(campaign.status)}</span></div>
         <div class="ah-readiness-list">${checks.length ? checks.map(item => `<article class="ah-readiness-row ${item.ready ? "ready" : "blocked"}"><span aria-hidden="true">${item.ready ? "✓" : "!"}</span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.message)}</p></div></article>`).join("") : `<div class="ah-empty">${state.readinessError ? "Readiness checks could not be loaded." : "Loading campaign checks…"}</div>`}</div>
@@ -907,10 +909,25 @@
       showView("auto-publishing");
       void loadOperations();
     } catch (error) {
-      state.workflowMessage = error.message;
+      state.workflowMessage = "";
+      state.readinessError = error.readiness ? "" : error.message;
       if (error.readiness) state.activationReadiness = error.readiness;
       renderCampaignReview();
     }
+  }
+
+  async function directActivateCampaign(campaignId, button) {
+    state.activeCampaignId = campaignId;
+    state.activationReadiness = null;
+    state.readinessError = "";
+    state.workflowMessage = "";
+    setActiveModule("campaign-review");
+    renderCampaignReview();
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Checking & activating…";
+    }
+    await activateCampaign();
   }
 
   async function controlCampaign(action) {
@@ -975,7 +992,7 @@
       const dayControl = form.querySelector(`[data-schedule-day="${day}"]`);
       scheduleDays[day] = {
         enabled: dayControl ? dayControl.checked : Boolean(current.scheduleDays?.[day]?.enabled),
-        times: [...(current.scheduleDays?.[day]?.times || [])]
+        times: []
       };
     }
     const pageSettings = {};
@@ -989,6 +1006,7 @@
       enabled: form.elements.enabled.checked,
       automaticApproval: form.elements.automaticApproval.checked,
       roundRobin: form.elements.roundRobin.checked,
+      repeatResources: form.elements.repeatResources.checked,
       weekendPublishing: form.elements.weekendPublishing.checked,
       timezone: values.get("timezone"),
       allowedHours: { start: values.get("allowedStart"), end: values.get("allowedEnd") },
@@ -1543,46 +1561,6 @@
     if (state.currentView === "publishing-settings") renderPublishingSettings();
   }
 
-  function updatePostingTimes(action, control) {
-    const form = root.querySelector("#ah-publishing-settings-form");
-    if (!form) return;
-    const settings = collectPublishingSettings(form);
-    if (action === "add-posting-time") {
-      const time = root.querySelector("#ah-posting-time").value;
-      const target = root.querySelector("#ah-posting-day").value;
-      const { start, end } = settings.allowedHours;
-      if (!time || time < start || time > end) {
-        state.workflowMessage = "Choose a posting time inside the allowed publishing hours.";
-        state.publishingSettingsDraft = settings;
-        renderPublishingSettings();
-        return;
-      }
-      const days = target === "Everyday"
-        ? ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", ...(settings.weekendPublishing ? ["Saturday", "Sunday"] : [])]
-        : [target];
-      for (const day of days) {
-        const daySettings = settings.scheduleDays[day];
-        if (!daySettings.times.includes(time)) daySettings.times.push(time);
-        daySettings.times.sort();
-        daySettings.enabled = true;
-      }
-      state.workflowMessage = `${time} added to ${target === "Everyday" ? "eligible days" : target}.`;
-    } else if (action === "remove-posting-time") {
-      settings.scheduleDays[control.dataset.day].times =
-        settings.scheduleDays[control.dataset.day].times.filter(time => time !== control.dataset.time);
-      if (!settings.scheduleDays[control.dataset.day].times.length) settings.scheduleDays[control.dataset.day].enabled = false;
-      state.workflowMessage = "Posting time removed.";
-    } else if (action === "clear-posting-times") {
-      for (const day of Object.values(settings.scheduleDays)) {
-        day.enabled = false;
-        day.times = [];
-      }
-      state.workflowMessage = "All weekly posting times cleared.";
-    }
-    state.publishingSettingsDraft = settings;
-    renderPublishingSettings();
-  }
-
   function showView(view, notice = "") {
     if (view === "ai-content-studio") {
       showView("ai-settings", notice);
@@ -1705,6 +1683,14 @@
           ? "auto-publishing"
           : campaign.status === "stopped" ? "settings" : getResumeView(campaign);
       showView(view);
+    } else if (action === "review-campaign") {
+      state.activeCampaignId = control.dataset.campaignId;
+      state.activationReadiness = null;
+      state.readinessError = "";
+      state.workflowMessage = "";
+      showView("campaign-review");
+    } else if (action === "direct-activate") {
+      void directActivateCampaign(control.dataset.campaignId, control);
     } else if (action === "reload-pages") {
       void loadFacebookPages();
     } else if (action === "select-visible-pages") {
@@ -1803,8 +1789,6 @@
       void syncCampaignInsights();
     } else if (action === "edit-campaign-step") {
       showView(control.dataset.view);
-    } else if (action === "add-posting-time" || action === "remove-posting-time" || action === "clear-posting-times") {
-      updatePostingTimes(action, control);
     }
   });
 
@@ -1828,7 +1812,14 @@
 
   root.addEventListener("change", event => {
     const target = event.target;
-    if (target.id === "ah-url-file" && target.files[0]) {
+    if (target.id === "ah-review-campaign") {
+      state.activeCampaignId = target.value;
+      state.activationReadiness = null;
+      state.readinessError = "";
+      state.workflowMessage = "";
+      renderCampaignReview();
+      void loadActivationReadiness();
+    } else if (target.id === "ah-url-file" && target.files[0]) {
       void importArticleFile(target.files[0]);
     } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {
       const files = [...target.files];
@@ -1854,9 +1845,6 @@
         const settings = collectPublishingSettings(form);
         const day = target.dataset.scheduleDay;
         settings.scheduleDays[day].enabled = target.checked;
-        if (target.checked && !settings.scheduleDays[day].times.length) {
-          settings.scheduleDays[day].times = [settings.allowedHours.start || "09:00"];
-        }
         state.publishingSettingsDraft = settings;
         renderPublishingSettings();
       }

@@ -74,12 +74,12 @@ test("validates the saved publishing schedule and per-Page limits", () => {
         scheduleDays: {
             Monday: { enabled: true, times: ["09:00", "17:00"] }
         },
-        pageSettings: { "page-a": { intervalMinutes: 15, dailyPostLimit: 20 } },
+        pageSettings: { "page-a": { intervalMinutes: 5, dailyPostLimit: 20 } },
         retryAttempts: 3,
         retryDelayMinutes: 5
     }, pages, "UTC");
     assert.equal(result.enabled, false);
-    assert.equal(result.pageSettings["page-a"].intervalMinutes, 15);
+    assert.equal(result.pageSettings["page-a"].intervalMinutes, 5);
     assert.deepEqual(result.pageSettings["page-b"], { intervalMinutes: 120, dailyPostLimit: 4 });
     assert.throws(() => validatePublishingSettings({
         timezone: "Not/A-Timezone",
@@ -93,7 +93,7 @@ test("validates the saved publishing schedule and per-Page limits", () => {
     }, pages), /Enable weekend publishing/);
 });
 
-test("builds an active-campaign queue from weekly times and per-Page limits", () => {
+test("builds a fixed-interval queue within daily times and per-Page limits", () => {
     const campaign = {
         campaignName: "Rajasthan Events",
         campaignType: "Event",
@@ -147,12 +147,73 @@ test("builds an active-campaign queue from weekly times and per-Page limits", ()
         now: Date.parse("2026-11-12T00:00:00.000Z")
     });
 
-    assert.equal(schedule.posts.length, 2);
+    assert.equal(schedule.posts.length, 8);
     assert.equal(schedule.posts[0].scheduledAt, "2026-11-13T03:30:00.000Z");
     assert.equal(schedule.posts[1].scheduledAt, "2026-11-13T03:30:00.000Z");
+    assert.equal(schedule.posts[2].scheduledAt, "2026-11-13T05:30:00.000Z");
     assert.ok(schedule.posts.every(post => post.status === "scheduled" && post.libraryImageId));
     assert.equal(schedule.settings.retryAttempts, 2);
     assert.equal(schedule.pages[0].minimumGapMinutes, 120);
+});
+
+test("publishes at fixed five-minute intervals and repeats assigned resources when enabled", () => {
+    const page = pages[0];
+    const campaign = {
+        campaignName: "Rajasthan Events",
+        startDate: "2026-11-13",
+        endDate: "2026-11-13",
+        pages: [page],
+        articleUrls: [{ url: "https://example.com/one" }],
+        imageIds: ["image-a"],
+        resourceAssignments: [{
+            roundIndex: 0,
+            assignments: [{
+                pageId: page.id,
+                pageName: page.name,
+                articleUrl: "https://example.com/one",
+                imageId: "image-a",
+                roundIndex: 0
+            }]
+        }],
+        aiContent: [{
+            id: "content-a",
+            pageId: page.id,
+            roundIndex: 0,
+            caption: "Read this article.",
+            articleUrl: "https://example.com/one",
+            imageId: "image-a",
+            status: "approved"
+        }]
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        automaticApproval: false,
+        repeatResources: true,
+        timezone: "Asia/Kolkata",
+        allowedHours: { start: "09:00", end: "09:10" },
+        scheduleDays: { Friday: { enabled: true } },
+        pageSettings: { [page.id]: { intervalMinutes: 5, dailyPostLimit: 3 } }
+    }, [page]);
+
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    });
+
+    assert.deepEqual(schedule.posts.map(post => post.scheduledAt), [
+        "2026-11-13T03:30:00.000Z",
+        "2026-11-13T03:35:00.000Z",
+        "2026-11-13T03:40:00.000Z"
+    ]);
+    assert.ok(schedule.posts.every(post => post.contentId === "content-a" && post.libraryImageId === "image-a"));
+
+    const singlePass = generateAutomaticSchedule({
+        campaign,
+        settings: { ...settings, repeatResources: false },
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    });
+    assert.equal(singlePass.posts.length, 1);
 });
 
 test("rejects incomplete or unapproved generated content before schedule creation", () => {
@@ -206,12 +267,12 @@ test("rejects incomplete or unapproved generated content before schedule creatio
     }), /Generate captions for every matching round/);
 });
 
-test("enforces Page intervals across adjacent campaign days", () => {
+test("enforces Page intervals across adjacent campaign days during DST", () => {
     const page = pages[0];
     const campaign = {
         campaignName: "Rajasthan Events",
-        startDate: "2026-11-13",
-        endDate: "2026-11-14",
+        startDate: "2026-03-07",
+        endDate: "2026-03-08",
         pages: [page],
         articleUrls: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
         imageIds: ["image-a", "image-b"],
@@ -238,12 +299,12 @@ test("enforces Page intervals across adjacent campaign days", () => {
     const settings = validatePublishingSettings({
         enabled: true,
         automaticApproval: false,
-        timezone: "Asia/Kolkata",
+        timezone: "America/New_York",
         allowedHours: { start: "09:00", end: "21:00" },
         weekendPublishing: true,
         scheduleDays: {
-            Friday: { enabled: true, times: ["20:00"] },
-            Saturday: { enabled: true, times: ["09:00"] }
+            Saturday: { enabled: true },
+            Sunday: { enabled: true }
         },
         pageSettings: { [page.id]: { intervalMinutes: 1440, dailyPostLimit: 1 } }
     }, [page]);
@@ -251,6 +312,6 @@ test("enforces Page intervals across adjacent campaign days", () => {
     assert.throws(() => generateAutomaticSchedule({
         campaign,
         settings,
-        now: Date.parse("2026-11-12T00:00:00.000Z")
+        now: Date.parse("2026-03-06T00:00:00.000Z")
     }), /only 1 future time slot/);
 });

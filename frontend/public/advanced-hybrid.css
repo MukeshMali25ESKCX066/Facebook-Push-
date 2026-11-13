@@ -61,6 +61,8 @@
 .ah-error { margin:0 0 12px; border:1px solid #fecdca; border-radius:9px; padding:10px 12px; background:#fef3f2; color:#b42318; font-size:11px; }
 .ah-workflow-panel { display:grid; gap:13px; }
 .ah-workflow-panel>.ah-panel-heading { margin-bottom:0; }
+.ah-review-campaign-picker { display:grid; max-width:420px; gap:6px; color:#344054; font-size:10px; font-weight:700; }
+.ah-review-campaign-picker select { min-height:38px; border:1px solid #d0d5dd; border-radius:8px; padding:8px 10px; background:#fff; color:#344054; font:400 11px "DM Sans",Arial,sans-serif; }
 .ah-page-toolbar,.ah-import-controls { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .ah-page-toolbar input,.ah-import-controls input[type="url"] { min-width:190px; min-height:38px; flex:1; border:1px solid #d0d5dd; border-radius:8px; padding:9px 11px; background:#fff; color:#344054; font:400 11px "DM Sans",Arial,sans-serif; }
 .ah-link-button { border:0; padding:5px 7px; background:transparent; color:#175cd3; cursor:pointer; font:700 10px "DM Sans",Arial,sans-serif; }
@@ -157,7 +159,7 @@
 .ah-generated-post>small { color:var(--ah-muted); font-size:9px; }
 .ah-generated-post .ah-button { justify-self:start; }
 .ah-day-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
-.ah-day-card { display:grid; align-content:start; gap:8px; min-height:83px; border:1px solid #e4e7ec; border-radius:9px; padding:9px; }
+.ah-day-card { display:grid; align-content:start; gap:8px; min-height:44px; border:1px solid #e4e7ec; border-radius:9px; padding:9px; }
 .ah-day-card .ah-check-field { min-height:0; border:0; padding:0; }
 .ah-day-card .ah-check-field input:disabled { opacity:.5; }
 .ah-time-chips { display:flex; flex-wrap:wrap; gap:5px; }

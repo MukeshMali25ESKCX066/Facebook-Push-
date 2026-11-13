@@ -302,7 +302,11 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         assert.equal(readyResponse.status, 200);
         const readiness = await readyResponse.json();
         assert.equal(readiness.ready, true, JSON.stringify(readiness.checks));
-        assert.equal(readiness.schedulePreview.postCount, 4);
+        const campaignDayCount = Math.round(
+            (Date.parse(`${campaign.endDate}T12:00:00.000Z`) - Date.parse(`${campaign.startDate}T12:00:00.000Z`)) / 86_400_000
+        ) + 1;
+        const expectedScheduledPostCount = campaignDayCount * 35;
+        assert.equal(readiness.schedulePreview.postCount, expectedScheduledPostCount);
 
         const activatedResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/activate`, {
             method: "POST",
@@ -313,12 +317,12 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const activation = await activatedResponse.json();
         assert.equal(activation.campaign.status, "active");
         assert.equal(activation.schedule.source, "automatic-campaign");
-        assert.equal(activation.schedule.posts.length, 4);
+        assert.equal(activation.schedule.posts.length, expectedScheduledPostCount);
         assert.ok(activation.schedule.posts.every(post => post.libraryImageId === undefined && post.imageUrl.includes("/api/media-library/")));
         assert.equal(scheduler.getSchedulesForWorkspace("account:workspace-a").length, 1);
         const queueResponse = await fetch(`${baseUrl}/api/scheduler/${campaign.id}`, { headers });
         assert.equal(queueResponse.status, 200);
-        assert.equal((await queueResponse.json()).posts.length, 4);
+        assert.equal((await queueResponse.json()).posts.length, expectedScheduledPostCount);
         const analyticsResponse = await fetch(`${baseUrl}/api/analytics/dashboard?campaignId=${campaign.id}`, { headers });
         assert.equal(analyticsResponse.status, 200);
         assert.equal((await analyticsResponse.json()).totals.totalPosts, 0);

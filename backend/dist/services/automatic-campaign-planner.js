@@ -113,21 +113,13 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
     for (const day of DAYS) {
         const value = input.scheduleDays?.[day] || {};
         const enabled = value.enabled === true;
-        const times = Array.isArray(value.times) ? value.times.map(time => String(time)) : [];
-        if (times.length > 12 || times.some(time => !TIME_PATTERN.test(time)) || new Set(times).size !== times.length) {
-            throw new Error(`Choose up to 12 unique valid posting times for ${day}.`);
+        if (WEEKEND_DAYS.has(day) && !weekendPublishing && enabled) {
+            throw new Error("Enable weekend publishing before selecting Saturday or Sunday.");
         }
-        if (times.some(time => time < start || time > end)) {
-            throw new Error(`Every ${day} posting time must be inside the allowed publishing hours.`);
-        }
-        if (enabled && !times.length) throw new Error(`Add at least one posting time for ${day}, or turn that day off.`);
-        if (WEEKEND_DAYS.has(day) && !weekendPublishing && (enabled || times.length)) {
-            throw new Error("Enable weekend publishing before adding Saturday or Sunday posting times.");
-        }
-        scheduleDays[day] = { enabled, times: times.sort() };
+        scheduleDays[day] = { enabled, times: [] };
     }
-    if (input.enabled === true && !Object.values(scheduleDays).some(day => day.enabled && day.times.length)) {
-        throw new Error("Add at least one enabled day and posting time before enabling auto publishing.");
+    if (input.enabled === true && !Object.values(scheduleDays).some(day => day.enabled)) {
+        throw new Error("Enable at least one publishing day before enabling auto publishing.");
     }
 
     const sourcePageSettings = input.pageSettings || {};
@@ -143,8 +135,8 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
         const value = sourcePageSettings[page.id] || {};
         const intervalMinutes = Number(value.intervalMinutes ?? 120);
         const dailyPostLimit = Number(value.dailyPostLimit ?? 4);
-        if (!Number.isInteger(intervalMinutes) || intervalMinutes < 15 || intervalMinutes > 1440) {
-            throw new Error(`The posting interval for ${page.name || "a Page"} must be between 15 and 1,440 minutes.`);
+        if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+            throw new Error(`The posting interval for ${page.name || "a Page"} must be between 1 and 1,440 minutes.`);
         }
         if (!Number.isInteger(dailyPostLimit) || dailyPostLimit < 1 || dailyPostLimit > 20) {
             throw new Error(`The daily post limit for ${page.name || "a Page"} must be between 1 and 20.`);
@@ -165,6 +157,7 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
         enabled: input.enabled === true,
         automaticApproval: input.automaticApproval === true,
         roundRobin: input.roundRobin !== false,
+        repeatResources: input.repeatResources !== false,
         timezone,
         allowedHours: { start, end },
         weekendPublishing,
@@ -259,16 +252,19 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             .sort((left, right) => left.roundIndex - right.roundIndex);
         const slots = [];
         let previousSlotTime = null;
+        const [startHour, startMinute] = settings.allowedHours.start.split(":").map(Number);
+        const [endHour, endMinute] = settings.allowedHours.end.split(":").map(Number);
+        const startMinutes = startHour * 60 + startMinute;
+        const endMinutes = endHour * 60 + endMinute;
 
         for (let date = startDate; date <= endDate;) {
             const weekday = dayNames[new Date(`${date}T12:00:00.000Z`).getUTCDay()];
             const daySettings = settings.scheduleDays[weekday];
             if (daySettings?.enabled) {
                 let dailySlots = 0;
-                for (const time of daySettings.times) {
+                for (let minute = startMinutes; minute <= endMinutes; minute += minimumGapMinutes) {
                     if (dailySlots >= dailyPostLimit) break;
-                    const [hour, minute] = time.split(":").map(Number);
-                    const scheduledAt = schedulerCore.localDateTimeToUtc(date, hour * 60 + minute, pageTimezone);
+                    const scheduledAt = schedulerCore.localDateTimeToUtc(date, minute, pageTimezone);
                     if (scheduledAt.getTime() <= now) continue;
                     if (previousSlotTime !== null &&
                         scheduledAt.getTime() - previousSlotTime < minimumGapMinutes * 60_000) continue;
@@ -295,28 +291,33 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             postingTimes: settings.scheduleDays
         });
 
-        pagePosts.forEach((content, index) => {
-            const slot = slots[Math.floor(index * slots.length / pagePosts.length)];
-            const articleUrl = content.assignment.articleUrl;
+        const postCount = settings.repeatResources ? slots.length : pagePosts.length;
+        for (let index = 0; index < postCount; index += 1) {
+            const slotIndex = settings.repeatResources
+                ? index
+                : Math.floor(index * slots.length / pagePosts.length);
+            const slot = slots[slotIndex];
+            const postContent = pagePosts[index % pagePosts.length];
+            const articleUrl = postContent.assignment.articleUrl;
             const utmUrl = schedulerCore.makeTrackingUrl(
                 articleUrl,
                 campaign.campaignName,
                 pageId,
-                content.id
+                postContent.id
             );
             posts.push({
-                contentId: content.id,
-                roundIndex: content.roundIndex,
+                contentId: postContent.id,
+                roundIndex: postContent.roundIndex,
                 pageOrder,
                 pageId,
-                pageName: page.name || content.pageName || "",
-                caption: content.caption,
-                cta: content.cta || "",
-                hashtags: content.hashtags || [],
+                pageName: page.name || postContent.pageName || "",
+                caption: postContent.caption,
+                cta: postContent.cta || "",
+                hashtags: postContent.hashtags || [],
                 articleUrl,
                 utmUrl,
-                content: schedulerCore.buildCaption(content, articleUrl, utmUrl),
-                libraryImageId: content.imageId,
+                content: schedulerCore.buildCaption(postContent, articleUrl, utmUrl),
+                libraryImageId: postContent.imageId,
                 imageId: "",
                 postType: campaign.campaignType || "Campaign",
                 purpose: "Website traffic",
@@ -325,7 +326,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 status: "scheduled",
                 attemptCount: 0
             });
-        });
+        }
     }
 
     posts.sort((left, right) => {
@@ -344,6 +345,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             timezone: settings.timezone,
             allowedHours: settings.allowedHours,
             scheduleDays: settings.scheduleDays,
+            repeatResources: settings.repeatResources,
             roundRobin: settings.roundRobin,
             retryAttempts: settings.retryAttempts,
             retryDelayMinutes: settings.retryDelayMinutes,
