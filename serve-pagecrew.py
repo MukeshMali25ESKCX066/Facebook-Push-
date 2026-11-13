@@ -17,6 +17,9 @@ class PageCrewHandler(SimpleHTTPRequestHandler):
         if self.path.startswith("/api/"):
             self.proxy()
             return
+        route = urlsplit(self.path)
+        if route.path.rstrip("/") == "/advanced-hybrid":
+            self.path = "/advanced-hybrid.html" + (f"?{route.query}" if route.query else "")
         requested = (FRONTEND / urlsplit(self.path).path.lstrip("/")).resolve()
         if not requested.is_relative_to(FRONTEND.resolve()) or not requested.is_file():
             self.path = "/index.html"

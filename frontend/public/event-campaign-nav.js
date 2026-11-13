@@ -1,9 +1,24 @@
 (function () {
-  const categories = [
-    { key: "event-campaigns", icon: "✦", label: "Event Campaigns", href: "/event-campaigns.html" },
-    { key: "ai-content", icon: "✧", label: "AI Content Generator", href: "/ai-content.html" },
-    { key: "scheduler", icon: "◷", label: "Smart Scheduler", href: "/scheduler.html" },
-    { key: "analytics", icon: "▥", label: "Analytics", href: "/analytics.html" }
+  const groups = [
+    {
+      id: "standard-auto-publishing",
+      label: "Standard Auto Publishing",
+      icon: "◈",
+      categories: [
+        { key: "event-campaigns", icon: "✦", label: "Event Campaigns", href: "/event-campaigns.html" },
+        { key: "ai-content", icon: "✧", label: "AI Content Generator", href: "/ai-content.html" },
+        { key: "scheduler", icon: "◷", label: "Smart Scheduler", href: "/scheduler.html" },
+        { key: "analytics", icon: "▥", label: "Analytics", href: "/analytics.html" }
+      ]
+    },
+    {
+      id: "automatic-auto-publishing",
+      label: "Automatic Auto Publishing",
+      icon: "⚡",
+      categories: [
+        { key: "advanced-hybrid", icon: "◉", label: "2. Design – Auto Publishing dashboard", href: "/advanced-hybrid" }
+      ]
+    }
   ];
 
   function createIcon(text, className) {
@@ -14,11 +29,8 @@
     return icon;
   }
 
-  function installCategory() {
-    const nav = document.querySelector(".nav");
-    if (!nav) return;
-
-    const links = categories.map(item => {
+  function installGroup(nav, config) {
+    const links = config.categories.map(item => {
       let link = nav.querySelector(`[data-pagecrew-category="${item.key}"]`)
         || Array.from(nav.querySelectorAll("a[href]")).find(anchor => anchor.getAttribute("href") === item.href);
       if (!link) {
@@ -28,33 +40,37 @@
         link.append(createIcon(item.icon, "pagecrew-nav-icon"), document.createTextNode(item.label));
       }
       link.dataset.pagecrewCategory = item.key;
+      if (window.location.pathname.replace(/\/$/, "") === item.href) {
+        link.classList.add("active");
+        link.setAttribute("aria-current", "page");
+      }
       return link;
     });
 
-    let group = nav.querySelector("[data-pagecrew-group]");
+    let group = nav.querySelector(`[data-pagecrew-group="${config.id}"]`);
     if (!group) {
       group = document.createElement("div");
       group.className = "pagecrew-nav-group";
-      group.dataset.pagecrewGroup = "standard-auto-publishing";
+      group.dataset.pagecrewGroup = config.id;
 
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "nav-link pagecrew-nav-toggle";
       toggle.setAttribute("aria-expanded", "true");
-      toggle.setAttribute("aria-controls", "pagecrew-standard-auto-publishing-submenu");
-      toggle.title = "Standard Auto Publishing";
+      toggle.setAttribute("aria-controls", `pagecrew-${config.id}-submenu`);
+      toggle.title = config.label;
       toggle.append(
-        createIcon("◈", "pagecrew-nav-icon"),
+        createIcon(config.icon, "pagecrew-nav-icon"),
         Object.assign(document.createElement("span"), {
           className: "pagecrew-nav-label",
-          textContent: "Standard Auto Publishing"
+          textContent: config.label
         }),
         createIcon("▾", "pagecrew-nav-chevron")
       );
 
       const submenu = document.createElement("div");
       submenu.className = "pagecrew-nav-submenu";
-      submenu.id = "pagecrew-standard-auto-publishing-submenu";
+      submenu.id = `pagecrew-${config.id}-submenu`;
       toggle.addEventListener("click", () => {
         const expanded = toggle.getAttribute("aria-expanded") === "true";
         toggle.setAttribute("aria-expanded", String(!expanded));
@@ -62,7 +78,8 @@
       });
 
       group.append(toggle, submenu);
-      nav.insertBefore(group, links[0] || null);
+      const firstLinkInNav = links.find(link => link.parentElement === nav) || null;
+      nav.insertBefore(group, firstLinkInNav);
     }
 
     const submenu = group.querySelector(".pagecrew-nav-submenu");
@@ -73,7 +90,13 @@
     group.querySelector(".pagecrew-nav-toggle").classList.toggle("active", active);
   }
 
-  installCategory();
+  function installCategories() {
+    const nav = document.querySelector(".nav");
+    if (!nav) return;
+    groups.forEach(group => installGroup(nav, group));
+  }
+
+  installCategories();
   const root = document.getElementById("root");
-  if (root) new MutationObserver(installCategory).observe(root, { childList: true, subtree: true });
+  if (root) new MutationObserver(installCategories).observe(root, { childList: true, subtree: true });
 })();

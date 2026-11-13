@@ -57,7 +57,8 @@
 @media (max-width: 760px) {
   body.event-campaign-page .pagecrew-nav-submenu .nav-link,
   body.ai-content-page .pagecrew-nav-submenu .nav-link,
-  body.analytics-page .pagecrew-nav-submenu .nav-link {
+  body.analytics-page .pagecrew-nav-submenu .nav-link,
+  body.advanced-hybrid-page .pagecrew-nav-submenu .nav-link {
     display: flex;
     justify-content: center;
     padding: 10px 0;
@@ -73,9 +74,20 @@
     display: none;
   }
 
+  body.advanced-hybrid-page .pagecrew-nav-toggle .pagecrew-nav-label,
+  body.advanced-hybrid-page .pagecrew-nav-toggle .pagecrew-nav-chevron {
+    display: none;
+  }
+
   body.event-campaign-page .pagecrew-nav-submenu,
   body.ai-content-page .pagecrew-nav-submenu,
   body.analytics-page .pagecrew-nav-submenu {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  body.advanced-hybrid-page .pagecrew-nav-submenu {
     margin: 0;
     padding: 0;
     border: 0;
