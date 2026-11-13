@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 
 const { randomUUID } = require("node:crypto");
+const { existsSync } = require("node:fs");
 const { Router } = require("express");
 const multer = require("multer");
 const ExcelJS = require("exceljs");
@@ -9,8 +10,13 @@ const auth = require("./auth.js");
 const pages = require("./pages.js");
 const mediaLibrary = require("../services/media-library-store.js");
 const aiContent = require("../services/ai-content.js");
-const { buildResourcePlan, validatePublishingSettings } = require("../services/automatic-campaign-planner.js");
+const {
+    buildResourcePlan,
+    generateAutomaticSchedule,
+    validatePublishingSettings
+} = require("../services/automatic-campaign-planner.js");
 const { parseHttpUrl, isPrivateAddress } = require("../services/public-url.js");
+const schedulerRoute = require("./scheduler.js");
 
 const router = Router();
 const campaigns = [];
@@ -124,6 +130,151 @@ function validateArticleUrls(value) {
             status: "Ready"
         };
     });
+}
+
+function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
+    const checks = [];
+    const check = (name, ready, message) => checks.push({ name, ready, message });
+    const selectedPages = campaign.pages || [];
+    const disconnectedPages = selectedPages.filter(page => {
+        const key = pages.pageTokenKey(workspaceScopeId, page.id);
+        const metadata = pages.pageMetadata[key];
+        return !metadata?.connected || !metadata.authorized || !pages.pageAccessTokens[key];
+    });
+    const pagesReady = selectedPages.length > 0 && disconnectedPages.length === 0;
+    check(
+        "Facebook Pages",
+        pagesReady,
+        pagesReady
+            ? `${selectedPages.length} selected Page(s) are connected and authorized to publish.`
+            : disconnectedPages.length
+                ? `Reconnect or reauthorize: ${disconnectedPages.map(page => page.name || page.id).join(", ")}.`
+                : "Select at least one authorized Facebook Page."
+    );
+
+    let articlesReady = false;
+    let articlesMessage = "Add at least one valid public article URL.";
+    try {
+        const articles = validateArticleUrls(campaign.articleUrls || []);
+        articlesReady = articles.length > 0;
+        if (articlesReady) articlesMessage = `${articles.length} valid article URL(s) are ready.`;
+    } catch (error) {
+        articlesMessage = error.message;
+    }
+    check("Article URLs", articlesReady, articlesMessage);
+
+    let imagesReady = false;
+    let imagesMessage = "Select campaign images.";
+    try {
+        const imageIds = mediaLibrary.validateImageIds(workspaceScopeId, campaign.imageIds || []);
+        const unavailable = imageIds.filter(id => {
+            const image = mediaLibrary.findImage(workspaceScopeId, id);
+            return !image || !existsSync(mediaLibrary.getImageFilePath(image));
+        });
+        imagesReady = imageIds.length > 0 && unavailable.length === 0;
+        imagesMessage = imagesReady
+            ? `${imageIds.length} selected image(s) are available.`
+            : unavailable.length
+                ? `${unavailable.length} selected image file(s) are missing; upload or replace them before activation.`
+                : "Select at least one campaign image.";
+    } catch (error) {
+        imagesMessage = error.message;
+    }
+    check("Campaign images", imagesReady, imagesMessage);
+
+    let aiReady = false;
+    let aiMessage = "";
+    try {
+        aiReady = Boolean(aiContent.getActiveTextProvider().apiKey);
+        if (!aiReady) aiMessage = "The AI provider API key is not configured in the backend.";
+    } catch (error) {
+        aiMessage = error.message;
+    }
+    if (!aiReady && !aiMessage) aiMessage = "Configure a supported AI provider and backend API key.";
+    check("AI provider", aiReady, aiReady
+        ? "The configured AI provider is available."
+        : aiMessage);
+
+    let publishingSettings;
+    let publishingSettingsError = "";
+    try {
+        publishingSettings = validatePublishingSettings(
+            campaign.publishingSettings,
+            selectedPages,
+            campaign.timezone
+        );
+        if (!publishingSettings.enabled) publishingSettingsError = "Enable auto publishing in Step 8.";
+    } catch (error) {
+        publishingSettingsError = error.message;
+    }
+    check("Publishing settings", Boolean(publishingSettings && publishingSettings.enabled), publishingSettingsError ||
+        "Publishing settings are valid and auto publishing is enabled.");
+
+    const datesReady = validDate(campaign.startDate) && validDate(campaign.endDate) &&
+        campaign.endDate >= campaign.startDate;
+    check("Campaign dates", datesReady, datesReady
+        ? `${campaign.startDate} through ${campaign.endDate}.`
+        : "Set a valid campaign date range with the end date on or after the start date.");
+
+    let contentReady = false;
+    let contentMessage = "Generate captions for every matching round.";
+    if (campaign.resourceAssignments?.length) {
+        const assignments = campaign.resourceAssignments.flatMap(round =>
+            (round.assignments || []).map(assignment => ({ ...assignment, roundIndex: round.roundIndex })));
+        const contentByKey = new Map((campaign.aiContent || []).map(content =>
+            [`${content.roundIndex}:${content.pageId}`, content]));
+        contentReady = assignments.length > 0 &&
+            (campaign.aiContent || []).length === assignments.length &&
+            assignments.every(assignment => {
+                const content = contentByKey.get(`${assignment.roundIndex}:${assignment.pageId}`);
+                return content && String(content.caption || "").trim() &&
+                    String(content.imageId || "") === String(assignment.imageId || "") &&
+                    String(content.articleUrl || "") === String(assignment.articleUrl || "") &&
+                    (publishingSettings?.automaticApproval || content.status === "approved");
+            }) && contentByKey.size === assignments.length;
+        if (contentReady) {
+            contentMessage = `${assignments.length} generated post(s) are ready${publishingSettings?.automaticApproval ? " for automatic approval" : " and approved"}.`;
+        } else if (publishingSettings && !publishingSettings.automaticApproval &&
+            (campaign.aiContent || []).some(content => content.status !== "approved")) {
+            contentMessage = "Approve every generated post, or enable automatic approval in Step 8.";
+        }
+    } else {
+        contentMessage = "Build the Step 6 matching plan and generate captions for every round.";
+    }
+    check("Generated and approved posts", contentReady, contentMessage);
+
+    let schedulePreview = null;
+    let scheduleError = "";
+    if (contentReady && publishingSettings?.enabled && datesReady) {
+        try {
+            const generated = generateAutomaticSchedule({
+                campaign,
+                settings: publishingSettings,
+                now
+            });
+            schedulePreview = {
+                postCount: generated.posts.length,
+                nextPostAt: generated.posts[0]?.scheduledAt || ""
+            };
+        } catch (error) {
+            scheduleError = error.message;
+        }
+    } else {
+        scheduleError = "Resolve the preceding readiness checks to validate future time slots.";
+    }
+    check("Future publishing slots", Boolean(schedulePreview), scheduleError ||
+        `${schedulePreview?.postCount || 0} post(s) fit the selected dates and Page limits.`);
+
+    const campaignCanStart = !["active", "paused"].includes(campaign.status);
+    check("Campaign status", campaignCanStart, campaignCanStart
+        ? "This campaign can be activated."
+        : "Pause or stop the running campaign before activating it again.");
+
+    return {
+        ready: checks.every(entry => entry.ready),
+        checks,
+        schedulePreview
+    };
 }
 
 function buildImageUsageHistory(campaign, imageIds) {
@@ -272,6 +423,85 @@ router.get("/:id", (req, res) => {
     res.json(campaign);
 });
 
+router.get("/:id/readiness", (req, res) => {
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    res.json(getActivationReadiness(campaign, req.workspaceScopeId));
+});
+
+router.post("/:id/activate", (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    const readiness = getActivationReadiness(campaign, req.workspaceScopeId);
+    if (!readiness.ready) {
+        return res.status(409).json({
+            error: "Complete every campaign readiness check before activation.",
+            readiness
+        });
+    }
+
+    const previous = { ...campaign };
+    if (campaign.publishingSettings.automaticApproval) {
+        campaign.aiContent = campaign.aiContent.map(content =>
+            content.status === "approved" ? content : { ...content, status: "approved" }
+        );
+    }
+    let schedule;
+    try {
+        schedule = schedulerRoute.createAutomaticCampaignSchedule({
+            campaign,
+            workspaceScopeId: req.workspaceScopeId
+        });
+    } catch (error) {
+        Object.assign(campaign, previous);
+        return res.status(409).json({ error: error.message || "The publishing schedule could not be activated." });
+    }
+
+    const activatedAt = new Date().toISOString();
+    Object.assign(campaign, {
+        status: "active",
+        scheduleId: schedule.id,
+        activatedAt,
+        updatedAt: activatedAt
+    });
+    if (!persistCampaigns()) {
+        Object.assign(campaign, previous);
+        if (!schedulerRoute.removeAutomaticCampaignSchedule(campaign.id, req.workspaceScopeId, schedule.id)) {
+            console.error("[automatic-campaigns] activation rollback could not remove the newly created schedule", campaign.id);
+        }
+        return res.status(500).json({ error: "Campaign activation could not be saved to encrypted storage." });
+    }
+    res.json({ campaign, schedule, readiness });
+});
+
+router.post("/:id/control", (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    const action = String(req.body?.action || "");
+    const nextStatus = { pause: "paused", resume: "active", stop: "stopped" }[action];
+    if (!nextStatus) return res.status(400).json({ error: "Choose pause, resume, or stop." });
+
+    const previous = { status: campaign.status, updatedAt: campaign.updatedAt };
+    campaign.status = nextStatus;
+    campaign.updatedAt = new Date().toISOString();
+    if (!persistCampaigns()) {
+        Object.assign(campaign, previous);
+        return res.status(500).json({ error: "Campaign status could not be saved." });
+    }
+    try {
+        const schedule = schedulerRoute.controlAutomaticCampaignSchedule(campaign.id, req.workspaceScopeId, action);
+        res.json({ campaign, schedule });
+    } catch (error) {
+        Object.assign(campaign, previous);
+        if (!persistCampaigns()) {
+            console.error("[automatic-campaigns] campaign status rollback could not be persisted", campaign.id);
+        }
+        res.status(409).json({ error: error.message || "Campaign status could not be changed." });
+    }
+});
+
 router.post("/", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const { errors, campaign: fields } = validateCampaign(req.body || {});
@@ -313,6 +543,11 @@ router.patch("/:id", (req, res) => {
     if (!campaign) {
         res.status(404).json({ error: "Campaign not found." });
         return;
+    }
+    if (["active", "paused"].includes(campaign.status) &&
+        ["pages", "articleUrls", "imageIds", "aiSettings", "publishingSettings", "currentStep"]
+            .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
+        return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
 
     const updates = {};
@@ -368,6 +603,8 @@ router.patch("/:id", (req, res) => {
         if (invalidatesPlan) {
             updates.resourceAssignments = [];
             updates.aiContent = [];
+            updates.aiSettings = null;
+            updates.publishingSettings = null;
             nextStep = Math.min(nextStep, 5);
         }
         if (nextStep !== Number(campaign.currentStep || 3) || Object.prototype.hasOwnProperty.call(req.body || {}, "currentStep")) {
@@ -392,6 +629,9 @@ router.post("/:id/match-resources", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    if (["active", "paused"].includes(campaign.status)) {
+        return res.status(409).json({ error: "Stop this campaign before rebuilding its matching plan." });
+    }
 
     try {
         const selectedImageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, campaign.imageIds || []);
@@ -431,6 +671,9 @@ router.post("/:id/ai-content/generate", async (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    if (["active", "paused"].includes(campaign.status)) {
+        return res.status(409).json({ error: "Stop this campaign before generating replacement content." });
+    }
 
     let settings;
     let round;
@@ -543,6 +786,9 @@ router.patch("/:id/ai-content/:contentId/approval", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    if (["active", "paused"].includes(campaign.status)) {
+        return res.status(409).json({ error: "Stop this campaign before changing post approvals." });
+    }
     const content = (campaign.aiContent || []).find(item => item.id === req.params.contentId);
     if (!content) return res.status(404).json({ error: "Generated post not found." });
     const status = String(req.body?.status || "");
@@ -572,6 +818,10 @@ router.post("/:id/import-urls", (req, res, next) => {
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) {
         res.status(404).json({ error: "Campaign not found." });
+        return;
+    }
+    if (["active", "paused"].includes(campaign.status)) {
+        res.status(409).json({ error: "Stop this campaign before importing replacement URLs." });
         return;
     }
     if (!req.file) {

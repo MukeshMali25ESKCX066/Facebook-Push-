@@ -9,6 +9,7 @@ const path = require("node:path");
 const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pagecrew-automatic-campaign-test-"));
 process.env.PAGECREW_DATA_DIR = dataDirectory;
 process.env.ENCRYPTION_KEY = "pagecrew-automatic-campaign-test-key";
+process.env.GEMINI_API_KEY = "automatic-campaign-test-key";
 const persistPath = require.resolve("../dist/persist.js");
 require.cache[persistPath] = {
     id: persistPath,
@@ -22,11 +23,15 @@ const auth = require("../dist/routes/auth.js");
 const pages = require("../dist/routes/pages.js");
 const aiContent = require("../dist/services/ai-content.js");
 const mediaLibrary = require("../dist/services/media-library-store.js");
+const scheduler = require("../dist/routes/scheduler.js");
 auth.getWorkspaceScopeId = async req => req.headers["x-test-workspace"] || "";
+const analytics = require("../dist/routes/analytics.js");
 const automaticCampaigns = require("../dist/routes/automatic-campaigns.js").default;
 const app = express();
 app.use(express.json());
 app.use("/api/automatic-campaigns", automaticCampaigns);
+app.use("/api/scheduler", scheduler);
+app.use("/api/analytics", analytics);
 const server = app.listen(0);
 
 test("creates draft campaigns and isolates them by workspace", async t => {
@@ -37,9 +42,12 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         fs.rmSync(dataDirectory, { recursive: true, force: true });
         delete process.env.PAGECREW_DATA_DIR;
         delete process.env.ENCRYPTION_KEY;
+        delete process.env.GEMINI_API_KEY;
     });
 
     const headers = { "x-test-workspace": "account:workspace-a", "content-type": "application/json" };
+    const campaignStart = new Date(Date.now() + 24 * 60 * 60_000).toISOString().slice(0, 10);
+    const campaignEnd = new Date(Date.now() + 16 * 24 * 60 * 60_000).toISOString().slice(0, 10);
     const created = await fetch(`${baseUrl}/api/automatic-campaigns`, {
         method: "POST",
         headers,
@@ -47,8 +55,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
             campaignName: "Rajasthan Events 2026",
             campaignType: "Event",
             description: "Website traffic campaign",
-            startDate: "2026-11-13",
-            endDate: "2026-11-30",
+            startDate: campaignStart,
+            endDate: campaignEnd,
             timezone: "Asia/Kolkata"
         })
     });
@@ -67,6 +75,7 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         connected: true,
         authorized: true
     };
+    pages.pageAccessTokens[pages.pageTokenKey("account:workspace-a", "page-a")] = "test-page-token-a";
     const updated = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
         method: "PATCH",
         headers,
@@ -157,18 +166,25 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         connected: true,
         authorized: true
     };
+    pages.pageAccessTokens[pages.pageTokenKey("account:workspace-a", "page-b")] = "test-page-token-b";
     const selectedImages = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
-    selectedImages.forEach((id, index) => mediaLibrary.images.push({
-        id,
-        workspaceScopeId: "account:workspace-a",
-        originalName: `image-${index + 1}.png`,
-        folderPath: index ? "events" : "",
-        size: 10,
-        mimeType: "image/png",
-        extension: "png",
-        width: 1,
-        height: 1
-    }));
+    selectedImages.forEach((id, index) => {
+        const image = {
+            id,
+            workspaceScopeId: "account:workspace-a",
+            originalName: `image-${index + 1}.png`,
+            folderPath: index ? "events" : "",
+            size: 10,
+            mimeType: "image/png",
+            extension: "png",
+            width: 1,
+            height: 1
+        };
+        mediaLibrary.images.push(image);
+        const imagePath = mediaLibrary.getImageFilePath(image);
+        fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+        fs.writeFileSync(imagePath, Buffer.from("test-image"));
+    });
     const readyForMatching = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
         method: "PATCH",
         headers,
@@ -212,14 +228,20 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         headers,
         body: JSON.stringify({
             publishingSettings: {
-                enabled: false,
+                enabled: true,
                 automaticApproval: true,
                 roundRobin: true,
                 timezone: "Asia/Kolkata",
                 allowedHours: { start: "09:00", end: "21:00" },
-                weekendPublishing: false,
-                scheduleDays: { Monday: { enabled: true, times: ["09:00"] } },
-                pageSettings: { "page-a": { intervalMinutes: 15, dailyPostLimit: 20 } },
+                weekendPublishing: true,
+                scheduleDays: Object.fromEntries(
+                    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+                        .map(day => [day, { enabled: true, times: ["20:00"] }])
+                ),
+                pageSettings: {
+                    "page-a": { intervalMinutes: 15, dailyPostLimit: 20 },
+                    "page-b": { intervalMinutes: 30, dailyPostLimit: 15 }
+                },
                 retryAttempts: 3,
                 retryDelayMinutes: 5
             },
@@ -227,18 +249,22 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         })
     });
     assert.equal(publishingSettings.status, 200);
-    assert.equal((await publishingSettings.json()).publishingSettings.enabled, false);
+    assert.equal((await publishingSettings.json()).publishingSettings.enabled, true);
 
     const originalGenerateContent = aiContent.generateContent;
-    aiContent.generateContent = async (_campaign, selectedPages) => ({
-        posts: selectedPages.map(page => ({
-            pageId: page.id,
-            caption: `A unique story for ${page.name}.`,
-            cta: "Read the article",
-            hashtags: ["PageCrew"]
-        })),
-        usage: { provider: "test", model: "test", inputTokens: 10, outputTokens: 20 }
-    });
+    let generationCall = 0;
+    aiContent.generateContent = async (_campaign, selectedPages) => {
+        generationCall += 1;
+        return {
+            posts: selectedPages.map(page => ({
+                pageId: page.id,
+                caption: `A unique story ${generationCall} for ${page.name}.`,
+                cta: "Read the article",
+                hashtags: ["PageCrew"]
+            })),
+            usage: { provider: "test", model: "test", inputTokens: 10, outputTokens: 20 }
+        };
+    };
     try {
         const generatedResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/ai-content/generate`, {
             method: "POST",
@@ -257,6 +283,76 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         });
         assert.equal(returnedToDraft.status, 200);
 
+        const incompleteReadiness = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/readiness`, { headers });
+        assert.equal(incompleteReadiness.status, 200);
+        const incompleteChecks = await incompleteReadiness.json();
+        assert.equal(incompleteChecks.ready, false);
+        assert.equal(incompleteChecks.checks.find(item => item.name === "Generated and approved posts").ready, false);
+
+        const generatedSecondRound = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/ai-content/generate`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ roundIndex: 1 })
+        });
+        assert.equal(generatedSecondRound.status, 200);
+        const fullCampaign = await generatedSecondRound.json();
+        assert.equal(fullCampaign.aiContent.length, 4);
+
+        const readyResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/readiness`, { headers });
+        assert.equal(readyResponse.status, 200);
+        const readiness = await readyResponse.json();
+        assert.equal(readiness.ready, true, JSON.stringify(readiness.checks));
+        assert.equal(readiness.schedulePreview.postCount, 4);
+
+        const activatedResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/activate`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({})
+        });
+        assert.equal(activatedResponse.status, 200);
+        const activation = await activatedResponse.json();
+        assert.equal(activation.campaign.status, "active");
+        assert.equal(activation.schedule.source, "automatic-campaign");
+        assert.equal(activation.schedule.posts.length, 4);
+        assert.ok(activation.schedule.posts.every(post => post.libraryImageId === undefined && post.imageUrl.includes("/api/media-library/")));
+        assert.equal(scheduler.getSchedulesForWorkspace("account:workspace-a").length, 1);
+        const queueResponse = await fetch(`${baseUrl}/api/scheduler/${campaign.id}`, { headers });
+        assert.equal(queueResponse.status, 200);
+        assert.equal((await queueResponse.json()).posts.length, 4);
+        const analyticsResponse = await fetch(`${baseUrl}/api/analytics/dashboard?campaignId=${campaign.id}`, { headers });
+        assert.equal(analyticsResponse.status, 200);
+        assert.equal((await analyticsResponse.json()).totals.totalPosts, 0);
+        const lockedResources = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ imageIds: selectedImages })
+        });
+        assert.equal(lockedResources.status, 409);
+
+        const paused = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/control`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ action: "pause" })
+        });
+        assert.equal(paused.status, 200);
+        assert.equal((await paused.json()).campaign.status, "paused");
+        const resumed = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/control`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ action: "resume" })
+        });
+        assert.equal(resumed.status, 200);
+        assert.equal((await resumed.json()).campaign.status, "active");
+        const stopped = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/control`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ action: "stop" })
+        });
+        assert.equal(stopped.status, 200);
+        const stoppedResult = await stopped.json();
+        assert.equal(stoppedResult.campaign.status, "stopped");
+        assert.ok(stoppedResult.schedule.posts.every(post => post.status === "cancelled"));
+
         const changedResources = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
             method: "PATCH",
             headers,
@@ -267,6 +363,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         assert.equal(invalidated.currentStep, 5);
         assert.deepEqual(invalidated.resourceAssignments, []);
         assert.deepEqual(invalidated.aiContent, []);
+        assert.equal(invalidated.aiSettings, null);
+        assert.equal(invalidated.publishingSettings, null);
     } finally {
         aiContent.generateContent = originalGenerateContent;
     }

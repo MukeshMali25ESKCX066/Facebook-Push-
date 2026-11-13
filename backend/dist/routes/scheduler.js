@@ -11,6 +11,8 @@ const postsRoute = require("./posts.js");
 const { publishToPage } = require("../services/meta.js");
 const schedulerCore = require("../services/scheduler-core.js");
 const schedulerWorker = require("../services/scheduler-worker.js");
+const automaticCampaignPlanner = require("../services/automatic-campaign-planner.js");
+const mediaLibrary = require("../services/media-library-store.js");
 
 const router = Router();
 const schedules = [];
@@ -51,7 +53,9 @@ function publicPost(post, campaignId) {
     const { imageId, libraryImageId: _libraryImageId, ...visible } = post;
     return {
         ...visible,
-        ...(imageId ? {
+        ...(post.libraryImageId ? {
+            imageUrl: `/api/media-library/${encodeURIComponent(post.libraryImageId)}/file`
+        } : imageId ? {
             imageUrl: `/api/campaigns/${encodeURIComponent(campaignId)}/ai/content/${encodeURIComponent(post.contentId)}/images/${encodeURIComponent(imageId)}`
         } : {})
     };
@@ -90,8 +94,16 @@ function findPageToken(workspaceScopeId, pageId) {
 async function publishScheduledPost(schedule, post) {
     const token = findPageToken(schedule.workspaceScopeId, post.pageId);
     if (!token) throw new Error("No Page access token. Reconnect Facebook and reload your Pages.");
-    if (post.libraryImageId && !post.imageId) {
-        throw new Error("This post used a removed campaign image library. Review its image before retrying.");
+    if (post.libraryImageId) {
+        const image = mediaLibrary.findImage(schedule.workspaceScopeId, post.libraryImageId);
+        if (!image) throw new Error("The selected media-library image is no longer available.");
+        const imagePath = mediaLibrary.getImageFilePath(image);
+        if (!existsSync(imagePath)) throw new Error("The selected media-library image file is unavailable.");
+        return publishToPage(post.pageId, token, post.content, {
+            path: imagePath,
+            mimeType: image.mimeType,
+            originalName: image.originalName
+        });
     }
     const mediaPath = post.imageId
         ? path.join(generatedImageDirectory, `${post.imageId}.png`)
@@ -186,6 +198,88 @@ setTimeout(() => {
 
 router.getSchedulesForWorkspace = workspaceScopeId =>
     schedules.filter(schedule => schedule.workspaceScopeId === workspaceScopeId);
+router.createAutomaticCampaignSchedule = ({ campaign, workspaceScopeId, now = Date.now() }) => {
+    if (!campaign || !workspaceScopeId) throw new Error("Campaign and workspace are required to create a schedule.");
+    const existing = findCampaignSchedule(campaign.id, workspaceScopeId);
+    if (existing && existing.status !== "stopped") {
+        throw new Error("This campaign already has a schedule. Stop it before creating a replacement.");
+    }
+
+    const generated = automaticCampaignPlanner.generateAutomaticSchedule({
+        campaign,
+        settings: campaign.publishingSettings,
+        now
+    });
+    assertNoPageConflicts(generated, workspaceScopeId, existing);
+    const timestamp = new Date(now).toISOString();
+    const schedule = {
+        id: randomUUID(),
+        campaignId: campaign.id,
+        workspaceScopeId,
+        source: "automatic-campaign",
+        status: "active",
+        settings: generated.settings,
+        pages: generated.pages,
+        posts: generated.posts.map(post => ({
+            ...post,
+            id: randomUUID(),
+            createdAt: timestamp,
+            updatedAt: timestamp
+        })),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        approvedAt: timestamp
+    };
+
+    const existingIndex = existing ? schedules.indexOf(existing) : -1;
+    if (existingIndex >= 0) schedules.splice(existingIndex, 1, schedule);
+    else schedules.push(schedule);
+    if (!persistSchedules()) {
+        if (existingIndex >= 0) schedules.splice(existingIndex, 1, existing);
+        else schedules.splice(schedules.indexOf(schedule), 1);
+        throw new Error("The publishing schedule could not be saved to encrypted storage.");
+    }
+    return publicSchedule(schedule);
+};
+router.removeAutomaticCampaignSchedule = (campaignId, workspaceScopeId, scheduleId) => {
+    const schedule = findCampaignSchedule(campaignId, workspaceScopeId);
+    if (!schedule || schedule.id !== scheduleId) return false;
+    const index = schedules.indexOf(schedule);
+    schedules.splice(index, 1);
+    if (persistSchedules()) return true;
+    schedules.splice(index, 0, schedule);
+    return false;
+};
+router.controlAutomaticCampaignSchedule = (campaignId, workspaceScopeId, action) => {
+    const schedule = findCampaignSchedule(campaignId, workspaceScopeId);
+    if (!schedule || schedule.source !== "automatic-campaign") {
+        throw new Error("Automatic campaign schedule not found.");
+    }
+    const previous = JSON.parse(JSON.stringify(schedule));
+    if (action === "pause" && schedule.status === "active") {
+        schedule.status = "paused";
+    } else if (action === "resume" && schedule.status === "paused") {
+        assertNoPageConflicts(schedule, workspaceScopeId, schedule);
+        schedule.status = "active";
+    } else if (action === "stop" && ["active", "paused"].includes(schedule.status)) {
+        schedule.status = "stopped";
+        for (const post of schedule.posts) {
+            if (post.status === "draft" || post.status === "scheduled") {
+                post.status = "cancelled";
+                post.updatedAt = new Date().toISOString();
+            }
+        }
+    } else {
+        const transition = { pause: "paused", resume: "resumed", stop: "stopped" }[action] || action;
+        throw new Error(`The campaign cannot be ${transition} from its current ${schedule.status} status.`);
+    }
+    schedule.updatedAt = new Date().toISOString();
+    if (!persistSchedules()) {
+        Object.assign(schedule, previous);
+        throw new Error("The campaign status could not be saved to encrypted storage.");
+    }
+    return publicSchedule(schedule);
+};
 router.use(requireWorkspace);
 
 router.get("/", (req, res) => {

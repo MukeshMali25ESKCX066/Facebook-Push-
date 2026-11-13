@@ -4,6 +4,7 @@ const { randomUUID } = require("node:crypto");
 const { Router } = require("express");
 const auth = require("./auth.js");
 const campaignsRoute = require("./campaigns.js");
+const automaticCampaignsRoute = require("./automatic-campaigns.js");
 const pages = require("./pages.js");
 const postsRoute = require("./posts.js");
 const schedulerRoute = require("./scheduler.js");
@@ -54,6 +55,12 @@ function persistOrRespond(res) {
 
 function ownSchedules(workspaceScopeId) {
     return schedulerRoute.getSchedulesForWorkspace(workspaceScopeId);
+}
+
+function findCampaignForWorkspace(campaignId, workspaceScopeId) {
+    return campaignsRoute.findCampaignForWorkspace(campaignId, workspaceScopeId) ||
+        automaticCampaignsRoute.getAutomaticCampaignsForWorkspace(workspaceScopeId)
+            .find(campaign => campaign.id === campaignId);
 }
 
 function pageNameFor(pageId, schedules) {
@@ -124,7 +131,7 @@ function trafficFor(workspaceScopeId) {
 function buildDashboardFor(req, range) {
     const campaignId = typeof req.query.campaignId === "string" ? req.query.campaignId : "";
     const pageId = typeof req.query.pageId === "string" ? req.query.pageId : "";
-    if (campaignId && !campaignsRoute.findCampaignForWorkspace(campaignId, req.workspaceScopeId)) {
+    if (campaignId && !findCampaignForWorkspace(campaignId, req.workspaceScopeId)) {
         const error = new Error("Campaign not found.");
         error.status = 404;
         throw error;
@@ -133,7 +140,7 @@ function buildDashboardFor(req, range) {
         ? new Set([campaignId])
         : new Set(ownSchedules(req.workspaceScopeId).map(schedule => schedule.campaignId));
     const campaigns = [...campaignIds].map(id =>
-        campaignsRoute.findCampaignForWorkspace(id, req.workspaceScopeId)).filter(Boolean);
+        findCampaignForWorkspace(id, req.workspaceScopeId)).filter(Boolean);
     const selectedSchedules = ownSchedules(req.workspaceScopeId)
         .filter(schedule => !campaignId || schedule.campaignId === campaignId)
         .map(schedule => ({

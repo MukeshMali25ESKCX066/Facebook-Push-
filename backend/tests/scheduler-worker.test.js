@@ -60,6 +60,33 @@ test("retries failures with increasing delays and stops after three attempts", a
     assert.equal(errors.filter(([message]) => message === "Facebook publish failed").length, 3);
 });
 
+test("honors the automatic campaign retry count and delay", async () => {
+    const schedule = {
+        status: "active",
+        settings: { retryAttempts: 2, retryDelayMinutes: 10 },
+        posts: [makePost("post-custom-retry")]
+    };
+    let now = Date.parse("2026-11-11T00:00:00.000Z");
+    let publishCalls = 0;
+    const dependencies = {
+        publishPost: async () => { publishCalls += 1; throw new Error("Meta unavailable"); },
+        persist: async () => true,
+        now: () => now
+    };
+
+    await processDuePosts([schedule], dependencies);
+    assert.equal(schedule.posts[0].retryAt, new Date(now + 10 * 60_000).toISOString());
+    now += 10 * 60_000;
+    await processDuePosts([schedule], dependencies);
+    assert.equal(schedule.posts[0].retryAt, new Date(now + 10 * 60_000).toISOString());
+    now += 10 * 60_000;
+    await processDuePosts([schedule], dependencies);
+
+    assert.equal(schedule.posts[0].status, "failed");
+    assert.equal(schedule.posts[0].attemptCount, 3);
+    assert.equal(publishCalls, 3);
+});
+
 test("does not begin another queued post after a campaign is paused in flight", async () => {
     const schedule = { status: "active", posts: [makePost("post-1"), makePost("post-2")] };
     const published = [];

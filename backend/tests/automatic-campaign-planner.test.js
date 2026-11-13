@@ -2,7 +2,11 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { buildResourcePlan, validatePublishingSettings } = require("../dist/services/automatic-campaign-planner.js");
+const {
+    buildResourcePlan,
+    generateAutomaticSchedule,
+    validatePublishingSettings
+} = require("../dist/services/automatic-campaign-planner.js");
 
 const pages = [
     { id: "page-a", name: "Page A" },
@@ -87,4 +91,166 @@ test("validates the saved publishing schedule and per-Page limits", () => {
         weekendPublishing: false,
         scheduleDays: { Sunday: { enabled: true, times: ["10:00"] } }
     }, pages), /Enable weekend publishing/);
+});
+
+test("builds an active-campaign queue from weekly times and per-Page limits", () => {
+    const campaign = {
+        campaignName: "Rajasthan Events",
+        campaignType: "Event",
+        startDate: "2026-11-13",
+        endDate: "2026-11-14",
+        pages,
+        articleUrls: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
+        imageIds: ["image-a", "image-b"],
+        resourceAssignments: [{
+            roundIndex: 0,
+            assignments: pages.map((page, index) => ({
+                pageId: page.id,
+                pageName: page.name,
+                articleUrl: `https://example.com/${index ? "two" : "one"}`,
+                imageId: index ? "image-b" : "image-a",
+                roundIndex: 0
+            }))
+        }],
+        aiContent: pages.map((page, index) => ({
+            id: `content-${page.id}`,
+            pageId: page.id,
+            pageName: page.name,
+            roundIndex: 0,
+            caption: `Read this article for ${page.name}.`,
+            articleUrl: `https://example.com/${index ? "two" : "one"}`,
+            imageId: index ? "image-b" : "image-a",
+            status: "approved"
+        }))
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        automaticApproval: false,
+        roundRobin: true,
+        timezone: "Asia/Kolkata",
+        allowedHours: { start: "09:00", end: "21:00" },
+        weekendPublishing: true,
+        scheduleDays: {
+            Friday: { enabled: true, times: ["09:00", "12:00"] },
+            Saturday: { enabled: true, times: ["09:00"] }
+        },
+        pageSettings: {
+            "page-a": { intervalMinutes: 120, dailyPostLimit: 2 },
+            "page-b": { intervalMinutes: 120, dailyPostLimit: 2 }
+        },
+        retryAttempts: 2,
+        retryDelayMinutes: 10
+    }, pages);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    });
+
+    assert.equal(schedule.posts.length, 2);
+    assert.equal(schedule.posts[0].scheduledAt, "2026-11-13T03:30:00.000Z");
+    assert.equal(schedule.posts[1].scheduledAt, "2026-11-13T03:30:00.000Z");
+    assert.ok(schedule.posts.every(post => post.status === "scheduled" && post.libraryImageId));
+    assert.equal(schedule.settings.retryAttempts, 2);
+    assert.equal(schedule.pages[0].minimumGapMinutes, 120);
+});
+
+test("rejects incomplete or unapproved generated content before schedule creation", () => {
+    const campaign = {
+        campaignName: "Rajasthan Events",
+        startDate: "2026-11-13",
+        endDate: "2026-11-14",
+        pages: [pages[0]],
+        articleUrls: [{ url: "https://example.com/one" }],
+        imageIds: ["image-a"],
+        resourceAssignments: [{
+            roundIndex: 0,
+            assignments: [{
+                pageId: pages[0].id,
+                pageName: pages[0].name,
+                articleUrl: "https://example.com/one",
+                imageId: "image-a",
+                roundIndex: 0
+            }]
+        }],
+        aiContent: [{
+            id: "content-a",
+            pageId: pages[0].id,
+            roundIndex: 0,
+            caption: "Read this article.",
+            articleUrl: "https://example.com/one",
+            imageId: "image-a",
+            status: "draft"
+        }]
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        automaticApproval: false,
+        timezone: "Asia/Kolkata",
+        allowedHours: { start: "09:00", end: "21:00" },
+        scheduleDays: { Friday: { enabled: true, times: ["09:00"] } },
+        pageSettings: { "page-a": { intervalMinutes: 15, dailyPostLimit: 4 } }
+    }, [pages[0]]);
+
+    assert.throws(() => generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    }), /Approve every generated post/);
+    campaign.publishingSettings = settings;
+    campaign.aiContent = [];
+    assert.throws(() => generateAutomaticSchedule({
+        campaign,
+        settings: { ...settings, automaticApproval: true },
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    }), /Generate captions for every matching round/);
+});
+
+test("enforces Page intervals across adjacent campaign days", () => {
+    const page = pages[0];
+    const campaign = {
+        campaignName: "Rajasthan Events",
+        startDate: "2026-11-13",
+        endDate: "2026-11-14",
+        pages: [page],
+        articleUrls: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
+        imageIds: ["image-a", "image-b"],
+        resourceAssignments: [0, 1].map(roundIndex => ({
+            roundIndex,
+            assignments: [{
+                pageId: page.id,
+                pageName: page.name,
+                articleUrl: `https://example.com/${roundIndex ? "two" : "one"}`,
+                imageId: roundIndex ? "image-b" : "image-a",
+                roundIndex
+            }]
+        })),
+        aiContent: [0, 1].map(roundIndex => ({
+            id: `content-${roundIndex}`,
+            pageId: page.id,
+            roundIndex,
+            caption: `Article ${roundIndex + 1}`,
+            articleUrl: `https://example.com/${roundIndex ? "two" : "one"}`,
+            imageId: roundIndex ? "image-b" : "image-a",
+            status: "approved"
+        }))
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        automaticApproval: false,
+        timezone: "Asia/Kolkata",
+        allowedHours: { start: "09:00", end: "21:00" },
+        weekendPublishing: true,
+        scheduleDays: {
+            Friday: { enabled: true, times: ["20:00"] },
+            Saturday: { enabled: true, times: ["09:00"] }
+        },
+        pageSettings: { [page.id]: { intervalMinutes: 1440, dailyPostLimit: 1 } }
+    }, [page]);
+
+    assert.throws(() => generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    }), /only 1 future time slot/);
 });

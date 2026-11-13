@@ -32,13 +32,20 @@ async function processDuePosts(schedules, { publishPost, persist, now = () => Da
             }
             catch (error) {
                 post.lastError = error instanceof Error ? error.message : "Facebook publish failed.";
-                if (post.attemptCount >= MAX_ATTEMPTS) {
+                const retryAttempts = Number.isInteger(schedule.settings?.retryAttempts)
+                    ? Math.max(0, Math.min(5, schedule.settings.retryAttempts))
+                    : MAX_ATTEMPTS - 1;
+                const maxAttempts = retryAttempts + 1;
+                if (post.attemptCount >= maxAttempts) {
                     post.status = "failed";
                     post.retryAt = undefined;
                 }
                 else {
                     post.status = "scheduled";
-                    post.retryAt = new Date(now() + RETRY_DELAYS_MS[post.attemptCount - 1]).toISOString();
+                    const retryDelay = Number.isInteger(schedule.settings?.retryDelayMinutes)
+                        ? schedule.settings.retryDelayMinutes * 60_000
+                        : RETRY_DELAYS_MS[post.attemptCount - 1];
+                    post.retryAt = new Date(now() + retryDelay).toISOString();
                 }
                 onError("Facebook publish failed", post.id, post.lastError);
             }
