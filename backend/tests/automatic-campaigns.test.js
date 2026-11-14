@@ -34,6 +34,12 @@ app.use("/api/scheduler", scheduler);
 app.use("/api/analytics", analytics);
 const server = app.listen(0);
 
+function dateTimeAfterDays(days, time) {
+    const date = new Date(Date.now() + days * 86_400_000);
+    date.setUTCHours(12, 0, 0, 0);
+    return `${date.toISOString().slice(0, 10)}T${time}`;
+}
+
 test("creates draft campaigns and isolates them by workspace", async t => {
     if (!server.listening) await new Promise(resolve => server.once("listening", resolve));
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -205,11 +211,13 @@ test("creates draft campaigns and isolates them by workspace", async t => {
                 { url: "https://example.com/article-one", title: "Article One" },
                 { url: "https://example.com/article-two", title: "Article Two" }
             ],
+            commonHashtags: "#PageCrew #RajasthanEvents",
             imageIds: selectedImages,
             currentStep: 5
         })
     });
     assert.equal(readyForMatching.status, 200);
+    assert.deepEqual((await readyForMatching.json()).commonHashtags, ["#PageCrew", "#RajasthanEvents"]);
 
     const matchingResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/match-resources`, {
         method: "POST",
@@ -234,6 +242,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     });
     assert.equal(aiSettings.status, 200);
 
+    const scheduleStartAt = dateTimeAfterDays(2, "09:00");
+    const scheduleEndAt = dateTimeAfterDays(17, "09:00");
     const publishingSettings = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
         method: "PATCH",
         headers,
@@ -243,15 +253,11 @@ test("creates draft campaigns and isolates them by workspace", async t => {
                 automaticApproval: true,
                 roundRobin: true,
                 timezone: "Asia/Kolkata",
-                allowedHours: { start: "09:00", end: "21:00" },
-                weekendPublishing: true,
-                scheduleDays: Object.fromEntries(
-                    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-                        .map(day => [day, { enabled: true, times: ["20:00"] }])
-                ),
+                startAt: scheduleStartAt,
+                endAt: scheduleEndAt,
                 pageSettings: {
-                    "page-a": { intervalMinutes: 15, dailyPostLimit: 20 },
-                    "page-b": { intervalMinutes: 30, dailyPostLimit: 15 }
+                    "page-a": { intervalMinutes: 15, dailyPostLimit: 1 },
+                    "page-b": { intervalMinutes: 30, dailyPostLimit: 1 }
                 },
                 retryAttempts: 3,
                 retryDelayMinutes: 5
@@ -293,6 +299,13 @@ test("creates draft campaigns and isolates them by workspace", async t => {
             body: JSON.stringify({ status: "draft" })
         });
         assert.equal(returnedToDraft.status, 200);
+        const approvedAll = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/ai-content/approve-all`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({})
+        });
+        assert.equal(approvedAll.status, 200);
+        assert.ok((await approvedAll.json()).aiContent.every(post => post.status === "approved"));
 
         const incompleteReadiness = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/readiness`, { headers });
         assert.equal(incompleteReadiness.status, 200);
@@ -314,9 +327,9 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const readiness = await readyResponse.json();
         assert.equal(readiness.ready, true, JSON.stringify(readiness.checks));
         const campaignDayCount = Math.round(
-            (Date.parse(`${campaign.endDate}T12:00:00.000Z`) - Date.parse(`${campaign.startDate}T12:00:00.000Z`)) / 86_400_000
+            (Date.parse(`${scheduleEndAt.slice(0, 10)}T12:00:00.000Z`) - Date.parse(`${scheduleStartAt.slice(0, 10)}T12:00:00.000Z`)) / 86_400_000
         ) + 1;
-        const expectedScheduledPostCount = campaignDayCount * 35;
+        const expectedScheduledPostCount = campaignDayCount * 2;
         assert.equal(readiness.schedulePreview.postCount, expectedScheduledPostCount);
 
         const activatedResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}/activate`, {
@@ -326,11 +339,17 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         });
         assert.equal(activatedResponse.status, 200);
         const activation = await activatedResponse.json();
-        assert.equal(activation.campaign.status, "active");
+        assert.equal(activation.campaign.status, "scheduled");
         assert.equal(activation.schedule.source, "automatic-campaign");
+        assert.equal(activation.schedule.status, "scheduled");
+        assert.equal(activation.schedule.activationAt > new Date().toISOString(), true);
         assert.equal(activation.schedule.posts.length, expectedScheduledPostCount);
         assert.ok(activation.schedule.posts.every(post => post.libraryImageId === undefined && post.imageUrl.includes("/api/media-library/")));
         assert.equal(scheduler.getSchedulesForWorkspace("account:workspace-a").length, 1);
+        scheduler.activateDueAutomaticSchedules(Date.parse(activation.schedule.activationAt) + 1000);
+        const activatedCampaignResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, { headers });
+        assert.equal((await activatedCampaignResponse.json()).status, "active");
+        assert.equal(scheduler.getSchedulesForWorkspace("account:workspace-a")[0].status, "active");
         const queueResponse = await fetch(`${baseUrl}/api/scheduler/${campaign.id}`, { headers });
         assert.equal(queueResponse.status, 200);
         assert.equal((await queueResponse.json()).posts.length, expectedScheduledPostCount);
@@ -402,6 +421,26 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         });
         assert.equal(linkOnlySaved.status, 200);
 
+        const missingScheduleReadiness = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}/readiness`, { headers });
+        assert.equal((await missingScheduleReadiness.json()).ready, false);
+        const linkOnlyStartAt = dateTimeAfterDays(3, "09:00");
+        const linkOnlyEndAt = dateTimeAfterDays(10, "09:00");
+        const linkOnlySettings = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+                publishingSettings: {
+                    enabled: true,
+                    timezone: "Asia/Kolkata",
+                    startAt: linkOnlyStartAt,
+                    endAt: linkOnlyEndAt,
+                    repeatResources: false,
+                    pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } }
+                }
+            })
+        });
+        assert.equal(linkOnlySettings.status, 200);
+
         const linkOnlyReadinessResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${linkOnlyCampaign.id}/readiness`, { headers });
         assert.equal(linkOnlyReadinessResponse.status, 200);
         const linkOnlyReadiness = await linkOnlyReadinessResponse.json();
@@ -418,7 +457,7 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         });
         assert.equal(linkOnlyActivated.status, 200);
         const linkOnlyResult = await linkOnlyActivated.json();
-        assert.equal(linkOnlyResult.campaign.status, "active");
+        assert.equal(linkOnlyResult.campaign.status, "scheduled");
         assert.equal(linkOnlyResult.schedule.posts.every(post => !post.libraryImageId), true);
         assert.equal(linkOnlyResult.schedule.posts[0].content.includes("https://"), false);
         assert.ok(linkOnlyResult.schedule.posts[0].utmUrl.includes("utm_source=facebook"));

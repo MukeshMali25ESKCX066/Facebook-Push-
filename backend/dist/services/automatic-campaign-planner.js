@@ -1,8 +1,7 @@
 "use strict";
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const WEEKEND_DAYS = new Set(["Saturday", "Sunday"]);
-const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/;
 const schedulerCore = require("./scheduler-core.js");
 const { randomUUID } = require("node:crypto");
 
@@ -99,26 +98,28 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
         throw new Error("Enter a valid IANA timezone.");
     }
 
-    const allowedHours = input.allowedHours || {};
-    const start = String(allowedHours.start || "");
-    const end = String(allowedHours.end || "");
-    if (!TIME_PATTERN.test(start) || !TIME_PATTERN.test(end) || start >= end) {
-        throw new Error("Choose a valid publishing-hours range where the end is later than the start.");
+    if (input.enabled !== true) throw new Error("Enable campaign scheduling before saving publishing settings.");
+    const startAt = String(input.startAt || "");
+    const endAt = String(input.endAt || "");
+    if (!LOCAL_DATE_TIME_PATTERN.test(startAt) || !LOCAL_DATE_TIME_PATTERN.test(endAt)) {
+        throw new Error("Enter a valid campaign start and end date-time.");
     }
-
-    const weekendPublishing = input.weekendPublishing === true;
-    const scheduleDays = {};
-    for (const day of DAYS) {
-        const value = input.scheduleDays?.[day] || {};
-        const enabled = value.enabled === true;
-        if (WEEKEND_DAYS.has(day) && !weekendPublishing && enabled) {
-            throw new Error("Enable weekend publishing before selecting Saturday or Sunday.");
+    const toUtc = (value, label) => {
+        const [date, time] = value.split("T");
+        const [hour, minute] = time.split(":").map(Number);
+        try {
+            return schedulerCore.localDateTimeToUtc(date, hour * 60 + minute, timezone);
+        } catch (error) {
+            throw new Error(`${label}: ${error.message}`);
         }
-        scheduleDays[day] = { enabled, times: [] };
+    };
+    const startDateTime = toUtc(startAt, "Campaign start date-time");
+    const endDateTime = toUtc(endAt, "Campaign end date-time");
+    if (endDateTime.getTime() <= startDateTime.getTime()) {
+        throw new Error("Campaign end date-time must be after its start date-time.");
     }
-    if (input.enabled === true && !Object.values(scheduleDays).some(day => day.enabled)) {
-        throw new Error("Enable at least one publishing day before enabling auto publishing.");
-    }
+    const scheduleDays = Object.fromEntries(DAYS.map(day => [day, { enabled: true, times: [] }]));
+    const weekendPublishing = true;
 
     const sourcePageSettings = input.pageSettings || {};
     if (!sourcePageSettings || typeof sourcePageSettings !== "object" || Array.isArray(sourcePageSettings)) {
@@ -152,12 +153,13 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
     }
 
     return {
-        enabled: input.enabled === true,
+        enabled: true,
         automaticApproval: input.automaticApproval === true,
         roundRobin: input.roundRobin !== false,
         repeatResources: input.repeatResources !== false,
         timezone,
-        allowedHours: { start, end },
+        startAt,
+        endAt,
         weekendPublishing,
         scheduleDays,
         pageSettings,
@@ -167,10 +169,21 @@ function validatePublishingSettings(input, pages, defaultTimezone = "UTC") {
 }
 
 function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
-    const startDate = schedulerCore.assertDate(campaign.startDate, "Campaign start date").toISOString().slice(0, 10);
-    const endDate = schedulerCore.assertDate(campaign.endDate, "Campaign end date").toISOString().slice(0, 10);
-    if (startDate > endDate) throw new Error("Campaign end date must be on or after the start date.");
-    if ((new Date(`${endDate}T12:00:00.000Z`) - new Date(`${startDate}T12:00:00.000Z`)) / 86_400_000 >= 366) {
+    const toUtc = (value, label) => {
+        if (!LOCAL_DATE_TIME_PATTERN.test(String(value || ""))) {
+            throw new Error(`${label} must be a valid date and time.`);
+        }
+        const [date, time] = value.split("T");
+        const [hour, minute] = time.split(":").map(Number);
+        return schedulerCore.localDateTimeToUtc(date, hour * 60 + minute, settings.timezone);
+    };
+    const startAt = toUtc(settings.startAt, "Campaign start date-time");
+    const endAt = toUtc(settings.endAt, "Campaign end date-time");
+    const startTime = startAt.getTime();
+    const endTime = endAt.getTime();
+    if (startTime < now) throw new Error("Campaign start date-time must be in the future.");
+    if (endTime <= startTime) throw new Error("Campaign end date-time must be after its start date-time.");
+    if (endTime - startTime >= 366 * 86_400_000) {
         throw new Error("An automatic publishing campaign cannot span more than 366 days.");
     }
     if (!settings.enabled) throw new Error("Enable auto publishing before activating this campaign.");
@@ -268,36 +281,56 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
         const pageTimezone = settings.timezone;
         const pagePosts = contentByPage.get(pageId)
             .sort((left, right) => left.roundIndex - right.roundIndex);
-        const slots = [];
-        let previousSlotTime = null;
-        const [startHour, startMinute] = settings.allowedHours.start.split(":").map(Number);
-        const [endHour, endMinute] = settings.allowedHours.end.split(":").map(Number);
-        const startMinutes = startHour * 60 + startMinute;
-        const endMinutes = endHour * 60 + endMinute;
-
-        for (let date = startDate; date <= endDate;) {
-            const weekday = dayNames[new Date(`${date}T12:00:00.000Z`).getUTCDay()];
-            const daySettings = settings.scheduleDays[weekday];
-            if (daySettings?.enabled) {
-                let dailySlots = 0;
-                for (let minute = startMinutes; minute <= endMinutes; minute += minimumGapMinutes) {
-                    if (dailySlots >= dailyPostLimit) break;
-                    const scheduledAt = schedulerCore.localDateTimeToUtc(date, minute, pageTimezone);
-                    if (scheduledAt.getTime() <= now) continue;
-                    if (previousSlotTime !== null &&
-                        scheduledAt.getTime() - previousSlotTime < minimumGapMinutes * 60_000) continue;
-                    slots.push({ date, scheduledAt });
-                    previousSlotTime = scheduledAt.getTime();
-                    dailySlots += 1;
-                }
+        const spanDays = Math.ceil((endTime - startTime) / 86_400_000) + 1;
+        const maxSlots = Math.min(
+            spanDays * dailyPostLimit,
+            Math.floor((endTime - startTime) / (minimumGapMinutes * 60_000)) + 1
+        );
+        const makeSlots = count => Array.from({ length: count }, (_unused, index) => ({
+            scheduledAt: new Date(count === 1
+                ? startTime
+                : startTime + Math.round((endTime - startTime) * index / (count - 1)))
+        }));
+        const slotsFit = slots => {
+            const perDay = new Map();
+            let previousTime = null;
+            const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+                timeZone: pageTimezone,
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit"
+            });
+            for (const slot of slots) {
+                const parts = Object.fromEntries(dateFormatter.formatToParts(slot.scheduledAt)
+                    .filter(part => part.type !== "literal")
+                    .map(part => [part.type, part.value]));
+                const date = `${parts.year}-${parts.month}-${parts.day}`;
+                const dayCount = (perDay.get(date) || 0) + 1;
+                if (dayCount > dailyPostLimit) return false;
+                perDay.set(date, dayCount);
+                if (previousTime !== null &&
+                    slot.scheduledAt.getTime() - previousTime < minimumGapMinutes * 60_000) return false;
+                previousTime = slot.scheduledAt.getTime();
             }
-            const nextDate = new Date(`${date}T12:00:00.000Z`);
-            nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-            date = nextDate.toISOString().slice(0, 10);
+            return true;
+        };
+        let slotCount = settings.repeatResources ? maxSlots : pagePosts.length;
+        if (!settings.repeatResources && slotCount > maxSlots) {
+            throw new Error(`${page.name || "A selected Page"} has ${pagePosts.length} post(s), but the selected date-time range and Page limits allow only ${maxSlots}.`);
         }
-
-        if (slots.length < pagePosts.length) {
-            throw new Error(`${page.name || "A selected Page"} has ${pagePosts.length} generated post(s), but only ${slots.length} future time slot(s) remain within the campaign dates and Page limits.`);
+        if (settings.repeatResources) {
+            let low = 1;
+            let high = maxSlots;
+            while (low < high) {
+                const middle = Math.ceil((low + high) / 2);
+                if (slotsFit(makeSlots(middle))) low = middle;
+                else high = middle - 1;
+            }
+            slotCount = low;
+        }
+        const slots = makeSlots(slotCount);
+        if (!slotsFit(slots)) {
+            throw new Error(`${page.name || "A selected Page"} does not have enough evenly spaced future slots within the selected date-time range and Page limits.`);
         }
         pages.push({
             pageId,
@@ -305,8 +338,8 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             timezone: pageTimezone,
             dailyPostLimit,
             minimumGapMinutes,
-            postingDays: dayNames.filter(day => settings.scheduleDays[day]?.enabled),
-            postingTimes: settings.scheduleDays
+            postingDays: dayNames,
+            postingTimes: []
         });
 
         const postCount = settings.repeatResources ? slots.length : pagePosts.length;
@@ -324,6 +357,10 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 pageId,
                 postContent.id
             );
+            const hashtags = [...new Set([
+                ...(Array.isArray(postContent.hashtags) ? postContent.hashtags : []),
+                ...(Array.isArray(campaign.commonHashtags) ? campaign.commonHashtags : [])
+            ])];
             posts.push({
                 contentId: postContent.id,
                 roundIndex: postContent.roundIndex,
@@ -332,11 +369,11 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 pageName: page.name || postContent.pageName || "",
                 caption: postContent.caption,
                 cta: postContent.cta || "",
-                hashtags: postContent.hashtags || [],
+                hashtags,
                 articleUrl,
                 utmUrl,
                 ...(postContent.assignment.previewUrl ? { sharedPreviewUrl: postContent.assignment.previewUrl } : {}),
-                content: schedulerCore.buildCaption(postContent),
+                content: schedulerCore.buildCaption({ ...postContent, hashtags }),
                 libraryImageId: postContent.assignment.previewUrl ? "" : postContent.imageId,
                 imageId: "",
                 postType: campaign.campaignType || "Campaign",
@@ -360,11 +397,9 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
     return {
         settings: {
             campaignName: campaign.campaignName,
-            startDate,
-            endDate,
+            startAt: startAt.toISOString(),
+            endAt: endAt.toISOString(),
             timezone: settings.timezone,
-            allowedHours: settings.allowedHours,
-            scheduleDays: settings.scheduleDays,
             repeatResources: settings.repeatResources,
             roundRobin: settings.roundRobin,
             retryAttempts: settings.retryAttempts,

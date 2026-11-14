@@ -99,12 +99,17 @@ function removeCaptionUrls(value) {
         .trim();
 }
 
+function containsHashtag(caption, hashtag) {
+    return String(caption || "").split(/\s+/).some(token =>
+        token.replace(/^[^\p{L}\p{N}_#]+|[^\p{L}\p{N}_]+$/gu, "") === hashtag);
+}
+
 function buildCaption(content) {
     let caption = removeCaptionUrls(content.caption);
     const cta = removeCaptionUrls(content.cta);
     const hashtags = Array.isArray(content.hashtags) ? content.hashtags.join(" ") : "";
     if (cta && !caption.includes(cta)) caption = `${caption}\n\n${cta}`;
-    const missingHashtags = hashtags.split(/\s+/).filter(tag => tag && !caption.includes(tag));
+    const missingHashtags = hashtags.split(/\s+/).filter(tag => tag && !containsHashtag(caption, tag));
     if (missingHashtags.length) caption = `${caption}\n\n${missingHashtags.join(" ")}`;
     return caption
         .replace(/(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi, "")

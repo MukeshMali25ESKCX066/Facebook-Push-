@@ -93,6 +93,17 @@
   function installCategories() {
     const nav = document.querySelector(".nav");
     if (!nav) return;
+    const seenLinks = new Map();
+    nav.querySelectorAll("a[href]").forEach(link => {
+      const url = new URL(link.getAttribute("href"), window.location.origin);
+      const key = `${url.pathname.replace(/\/$/, "")}${url.search}${url.hash}`;
+      const previous = seenLinks.get(key);
+      if (!previous) seenLinks.set(key, link);
+      else if (link.classList.contains("active") && !previous.classList.contains("active")) {
+        previous.remove();
+        seenLinks.set(key, link);
+      } else link.remove();
+    });
     groups.forEach(group => installGroup(nav, group));
   }
 

@@ -6,6 +6,8 @@
     campaigns: [],
     currentView: "overview",
     activeCampaignId: "",
+    previewDevice: "mobile",
+    previewContentId: "",
     pages: [],
     pageErrors: [],
     imageAssets: [],
@@ -77,8 +79,9 @@
       "url-library": "Step 4 · Add Article URLs",
       "image-library": "Step 5 · Optional Images",
       "smart-matching": "Step 6 · Optional Resource Preview",
-      "ai-settings": "Step 7 · Optional AI Captions",
-      "publishing-settings": "Step 8 · Optional Schedule Settings",
+      "ai-settings": "Step 7 · AI Captions",
+      "post-preview": "Post Preview",
+      "publishing-settings": "Step 8 · Required Campaign Schedule",
       "campaign-review": "Step 9 · Review & Activate",
       "auto-publishing": "Step 10 · Automatic Processing",
       "publishing-queue": "Step 10 · Publishing Queue",
@@ -95,7 +98,7 @@
   }
 
   function campaignRow(campaign, includeAction = false) {
-    const actionLabel = ["active", "paused"].includes(campaign.status)
+    const actionLabel = ["active", "paused", "scheduled"].includes(campaign.status)
       ? "View publishing"
       : campaign.status === "stopped" ? "Manage campaign" : "Continue setup";
     const canActivate = ["draft", "stopped"].includes(campaign.status);
@@ -107,7 +110,7 @@
       <div class="ah-campaign-actions">
         <span class="ah-status">${escapeHtml(campaign.status)}</span>
         ${includeAction ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign" data-campaign-id="${escapeHtml(campaign.id)}">${actionLabel}</button>` : ""}
-        ${includeAction && canActivate ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="review-campaign" data-campaign-id="${escapeHtml(campaign.id)}">Review &amp; Activate</button><button type="button" class="ah-button" data-ah-action="direct-activate" data-campaign-id="${escapeHtml(campaign.id)}">Activate now</button>` : ""}
+        ${includeAction && canActivate ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="review-campaign" data-campaign-id="${escapeHtml(campaign.id)}">Review &amp; Schedule</button>` : ""}
       </div>
     </article>`;
   }
@@ -169,7 +172,7 @@
       <div class="ah-error" id="ah-form-error" role="alert" hidden></div>
       <section class="ah-panel ah-form-panel">
         <div class="ah-panel-heading">
-        <div><p class="ah-kicker">Step 1 · Campaign setup</p><h2>Create New Campaign</h2><p>Only a campaign name is required. Dates and publishing settings can use safe defaults.</p></div>
+        <div><p class="ah-kicker">Step 1 · Campaign setup</p><h2>Create New Campaign</h2><p>Campaign scheduling is required before posts can be queued.</p></div>
         </div>
         <form id="ah-campaign-form">
           <div class="ah-form-grid">
@@ -359,14 +362,19 @@
           </section>` : ""}
         <section class="ah-import-card">
           <h3>Paste URLs or import a file</h3>
-          <label class="ah-field">Article URLs
-            <textarea id="ah-url-input" rows="4" placeholder="https://yourwebsite.com/article-one&#10;https://yourwebsite.com/article-two"></textarea>
-          </label>
+          <div class="ah-url-hashtag-grid">
+            <label class="ah-field">Article URLs
+              <textarea id="ah-url-input" rows="4" placeholder="https://yourwebsite.com/article-one&#10;https://yourwebsite.com/article-two"></textarea>
+            </label>
+            <label class="ah-field">Common hashtags · added to every campaign post
+              <textarea id="ah-common-hashtags" rows="4" maxlength="500" placeholder="#YourCommonHashtag">${escapeHtml((campaign.commonHashtags || []).join(" "))}</textarea>
+            </label>
+          </div>
           <div class="ah-import-controls"><button type="button" class="ah-button ah-button-secondary" data-ah-action="add-urls">Add pasted URLs</button><label class="ah-button ah-button-secondary ah-file-button">Choose CSV/XLSX<input id="ah-url-file" type="file" accept=".csv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label></div>
-          <p class="ah-help-text">Paste multiple URLs one per line. Files may contain one URL column; up to 200 URLs and 3 MB per upload.</p>
+          <p class="ah-help-text">Paste multiple URLs one per line. Files may contain one URL column; up to 200 URLs and 3 MB per upload. Hashtags are saved with the links and added to every campaign post when it publishes.</p>
         </section>
         <div class="ah-article-list">${articleRows || `<div class="ah-empty">No article URLs added yet.</div>`}</div>
-        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected · images and AI are optional</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Article List</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles-and-images">Continue to Images</button><button type="button" class="ah-button" data-ah-action="save-articles-and-activate">Save Link &amp; Activate</button></div></div>
+        <div class="ah-workflow-footer"><span>${articleUrls.length} article${articleUrls.length === 1 ? "" : "s"} selected · hashtags apply to every post</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles">Save Links &amp; Hashtags</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-articles-and-images">Continue to Images</button><button type="button" class="ah-button" data-ah-action="save-articles-and-schedule">Save &amp; Set Schedule</button></div></div>
       </section>`;
     const discoverySearch = root.querySelector("#ah-discovery-search");
     if (discoverySearch) {
@@ -487,7 +495,7 @@
           ${imageCards ? `<div class="ah-image-library-grid">${imageCards}</div>` : ""}
           <div class="ah-empty" data-image-empty ${hasVisibleImages ? "hidden" : ""}>${search ? "No images match this search." : state.imageFolder ? "This folder has no images." : state.imageAssets.length ? "No images in the root folder." : "No images uploaded yet. Select images, a folder, or a ZIP archive to get started."}</div>
         </div>
-        <div class="ah-workflow-footer"><span id="ah-image-selection-count">${selectedIds.size} optional image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection">Save selected images</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection-and-match">Save &amp; preview assignments</button><button type="button" class="ah-button" data-ah-action="save-image-selection-and-activate">Save &amp; Activate</button></div></div>
+        <div class="ah-workflow-footer"><span id="ah-image-selection-count">${selectedIds.size} optional image${selectedIds.size === 1 ? "" : "s"} selected for ${escapeHtml(campaign.campaignName)}</span><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection">Save selected images</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-image-selection-and-match">Save &amp; preview assignments</button><button type="button" class="ah-button" data-ah-action="save-image-selection-and-schedule">Save &amp; Set Schedule</button></div></div>
       </section>`;
   }
 
@@ -524,9 +532,26 @@
           <article><strong>${assignments.length}</strong><span>Preview posts</span></article>
         </div>
         ${!canMatch ? `<div class="ah-inline-warning">Choose at least one authorized Page and add one article URL. Images are optional.</div>` : ""}
-        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="build-matching-plan" ${canMatch ? "" : "disabled"}>${rounds.length ? "Refresh optional preview" : "Build optional preview"}</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-ai-settings">Optional AI captions →</button><button type="button" class="ah-button" data-ah-action="continue-campaign-review">Skip to Review &amp; Activate</button></div>
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="build-matching-plan" ${canMatch ? "" : "disabled"}>${rounds.length ? "Refresh optional preview" : "Build optional preview"}</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-ai-settings">Optional AI captions →</button><button type="button" class="ah-button" data-ah-action="continue-campaign-schedule">Continue to Required Schedule</button></div>
         ${assignments.length ? `<div class="ah-matching-table">${assignmentRows}</div>` : `<div class="ah-empty">You can skip this preview; the campaign will assign links automatically when activated.</div>`}
       </section>`;
+  }
+
+  function containsCaptionHashtag(caption, hashtag) {
+    return String(caption || "").split(/\s+/).some(token =>
+      token.replace(/^[^\p{L}\p{N}_#]+|[^\p{L}\p{N}_]+$/gu, "") === hashtag);
+  }
+
+  function buildPreviewCaption(post, commonHashtags) {
+    let caption = String(post.caption || "");
+    const cta = String(post.cta || "");
+    if (cta && !caption.includes(cta)) caption = `${caption}\n\n${cta}`;
+    const generatedHashtags = Array.isArray(post.hashtags) ? post.hashtags : [];
+    const campaignHashtags = Array.isArray(commonHashtags) ? commonHashtags : [];
+    const hashtags = [...new Set([...generatedHashtags, ...campaignHashtags])];
+    const missingHashtags = hashtags.filter(tag => tag && !containsCaptionHashtag(caption, tag));
+    if (missingHashtags.length) caption = `${caption}\n\n${missingHashtags.join(" ")}`;
+    return caption;
   }
 
   function renderAiSettings() {
@@ -559,13 +584,14 @@
     ).length;
     const contentCards = generated.map(post => {
       const image = state.imageAssets.find(item => item.id === post.imageId);
+      const hashtags = [...new Set([...(post.hashtags || []), ...(campaign.commonHashtags || [])])];
       return `<article class="ah-generated-post">
         <div class="ah-generated-post-heading"><strong>${escapeHtml(post.pageName)}</strong><span class="ah-status ${post.status === "approved" ? "ah-status-ready" : ""}">${escapeHtml(post.status)}</span></div>
         ${image ? `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(post.imageName)}" loading="lazy">` : ""}
         <a href="${escapeHtml(post.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(post.articleTitle || post.articleUrl)}</a>
         <p>${escapeHtml(post.caption)}</p>
         ${post.cta ? `<small>CTA: ${escapeHtml(post.cta)}</small>` : ""}
-        ${(post.hashtags || []).length ? `<small>${escapeHtml(post.hashtags.join(" "))}</small>` : ""}
+        ${hashtags.length ? `<small>${escapeHtml(hashtags.join(" "))}</small>` : ""}
         <button type="button" class="ah-button ah-button-secondary" data-ah-action="toggle-post-approval" data-content-id="${escapeHtml(post.id)}" data-next-status="${post.status === "approved" ? "draft" : "approved"}">${post.status === "approved" ? "Return to draft" : "Approve post"}</button>
       </article>`;
     }).join("");
@@ -587,35 +613,86 @@
             <label class="ah-check-field"><input type="checkbox" name="perPageVariation" ${settings.perPageVariation !== false ? "checked" : ""}>Create a distinct caption for each Page</label>
             <label class="ah-check-field"><input type="checkbox" name="detectDuplicates" ${settings.detectDuplicates !== false ? "checked" : ""}>Detect duplicate captions across Pages</label>
           </div>
-          <div class="ah-form-footer"><span>AI is never required to activate a campaign.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${generationBusy ? "disabled" : ""}>Save AI settings${rounds.length ? " &amp; Generate Captions" : ""} →</button></div></div>
+          <div class="ah-form-footer"><span>AI is optional; the campaign schedule is required.</span><div class="ah-form-actions"><button type="submit" class="ah-button" ${generationBusy ? "disabled" : ""}>Save AI settings${rounds.length ? " &amp; Generate Captions" : ""} →</button></div></div>
         </form>
         ${rounds.length ? `
           <section class="ah-ai-generation">
-            <div class="ah-panel-heading"><div><h3>Campaign captions</h3><p>Generate all missing captions together. Completed content is kept and is not generated again.</p></div><button type="button" class="ah-button" data-ah-action="generate-campaign-captions" ${generationBusy || !captionsMissing ? "disabled" : ""}>${generationBusy ? "Generating captions…" : `Generate missing captions (${captionsMissing})`}</button></div>
+            <div class="ah-panel-heading"><div><h3>Campaign captions</h3><p>Generate missing captions, review them, or approve all generated posts together.</p></div><div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="approve-all-posts" ${generationBusy || !generated.some(post => post.status !== "approved") ? "disabled" : ""}>Approve All</button><button type="button" class="ah-button" data-ah-action="generate-campaign-captions" ${generationBusy || !captionsMissing ? "disabled" : ""}>${generationBusy ? "Generating captions…" : `Generate missing captions (${captionsMissing})`}</button></div></div>
             ${contentCards ? `<div class="ah-generated-post-grid">${contentCards}</div>` : `<div class="ah-empty">No captions generated. Saving settings will generate the campaign captions; or skip this section.</div>`}
           </section>` : ""}
-        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Skip AI and Review &amp; Activate →</button></div>
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-schedule">Skip AI &amp; Set Required Schedule →</button></div>
       </section>`;
     const form = root.querySelector("#ah-ai-settings-form");
     form.addEventListener("input", () => { state.aiSettingsDraft = collectAiSettings(form); });
     form.addEventListener("change", () => { state.aiSettingsDraft = collectAiSettings(form); });
   }
 
-  function defaultPublishingSettings(campaign) {
-    const scheduleDays = {};
-    for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
-      const enabled = !["Sunday", "Saturday"].includes(day);
-      scheduleDays[day] = { enabled, times: [] };
+  function renderPostPreview() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("post-preview");
+      return;
     }
+    const posts = campaign.aiContent || [];
+    if (!posts.length) {
+      root.innerHTML = `<section class="ah-panel"><div class="ah-panel-heading"><div><h2>Post Preview</h2><p>Generate campaign captions to preview the post on mobile and laptop.</p></div></div><div class="ah-empty">No generated posts to preview yet.</div><button type="button" class="ah-button ah-button-secondary" data-ah-action="ai-settings">Open AI Captions</button></section>`;
+      return;
+    }
+    if (!posts.some(post => post.id === state.previewContentId)) state.previewContentId = posts[0].id;
+    const post = posts.find(item => item.id === state.previewContentId) || posts[0];
+    const image = state.imageAssets.find(item => item.id === post.imageId);
+    const caption = buildPreviewCaption(post, campaign.commonHashtags);
+    root.innerHTML = `
+      ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Campaign post</p><h2>Mobile and laptop preview</h2><p>Preview of the selected Page's generated caption, image, and common hashtags.</p></div></div>
+        <div class="ah-preview-toolbar">
+          <label class="ah-field">Post to preview<select id="ah-preview-post">${posts.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === post.id ? "selected" : ""}>${escapeHtml(item.pageName)} · Round ${Number(item.roundIndex) + 1}</option>`).join("")}</select></label>
+          <div class="ah-preview-device-switch" role="group" aria-label="Preview device">
+            <button type="button" class="ah-button ${state.previewDevice === "mobile" ? "" : "ah-button-secondary"}" data-ah-action="preview-device" data-device="mobile" aria-pressed="${state.previewDevice === "mobile"}">Mobile</button>
+            <button type="button" class="ah-button ${state.previewDevice === "laptop" ? "" : "ah-button-secondary"}" data-ah-action="preview-device" data-device="laptop" aria-pressed="${state.previewDevice === "laptop"}">Laptop</button>
+          </div>
+        </div>
+        <div class="ah-preview-stage">
+          <div class="ah-device-frame ah-device-${state.previewDevice}">
+            <article class="ah-social-preview">
+              <header><span class="ah-social-avatar">f</span><div><strong>${escapeHtml(post.pageName || "Facebook Page")}</strong><small>Sponsored · PageCrew preview</small></div></header>
+              <p class="ah-social-caption">${escapeHtml(caption)}</p>
+              ${image ? `<img class="ah-social-image" src="${escapeHtml(image.url)}" alt="${escapeHtml(post.imageName || "Campaign post image")}">` : `<div class="ah-social-image-placeholder">No image selected for this post</div>`}
+              <footer><span>Like</span><span>Comment</span><span>Share</span></footer>
+              <a class="ah-social-destination" href="${escapeHtml(post.articleUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(post.articleTitle || post.articleUrl || "Article destination")}</a>
+            </article>
+          </div>
+        </div>
+        <p class="ah-inline-note">${escapeHtml(post.status)} · Common hashtags are included in every scheduled campaign post.</p>
+      </section>`;
+  }
+
+  function defaultPublishingSettings(campaign) {
+    const timezone = campaign.timezone || "Asia/Kolkata";
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date()).filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+    const today = new Date(`${parts.year}-${parts.month}-${parts.day}T12:00:00.000Z`);
+    const dateAfter = days => {
+      const date = new Date(today);
+      date.setUTCDate(date.getUTCDate() + days);
+      return date.toISOString().slice(0, 10);
+    };
     return {
       enabled: true,
       automaticApproval: true,
       roundRobin: true,
       repeatResources: true,
-      timezone: campaign.timezone || "Asia/Kolkata",
-      allowedHours: { start: "09:00", end: "10:00" },
-      weekendPublishing: false,
-      scheduleDays,
+      timezone,
+      startAt: `${dateAfter(1)}T09:00`,
+      endAt: `${dateAfter(30)}T21:00`,
+      weekendPublishing: true,
+      scheduleDays: Object.fromEntries(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        .map(day => [day, { enabled: true, times: [] }])),
       pageSettings: Object.fromEntries((campaign.pages || []).map(page => [page.id, { intervalMinutes: 60, dailyPostLimit: 1 }])),
       retryAttempts: 3,
       retryDelayMinutes: 5
@@ -628,13 +705,8 @@
       renderCampaignChooser("publishing-settings");
       return;
     }
-    const settings = state.publishingSettingsDraft || campaign.publishingSettings || defaultPublishingSettings(campaign);
-    const dayCards = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(day => {
-      const daySettings = settings.scheduleDays?.[day] || { enabled: false, times: [] };
-      return `<article class="ah-day-card">
-        <label class="ah-check-field"><input type="checkbox" data-schedule-day="${day}" ${daySettings.enabled ? "checked" : ""} ${["Sunday", "Saturday"].includes(day) && !settings.weekendPublishing ? "disabled" : ""}>${day}</label>
-      </article>`;
-    }).join("");
+    const defaults = defaultPublishingSettings(campaign);
+    const settings = state.publishingSettingsDraft || campaign.publishingSettings || defaults;
     const pageRows = (campaign.pages || []).map(page => {
       const config = settings.pageSettings?.[page.id] || { intervalMinutes: 60, dailyPostLimit: 1 };
       return `<div class="ah-page-setting-row">
@@ -645,45 +717,33 @@
     }).join("");
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
-      <div class="ah-inline-note">Optional: if you skip this section, the campaign uses weekday publishing, a two-hour interval, and safe default limits.</div>
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Optional Schedule Settings</p><h2>Customize the publishing schedule</h2><p>If skipped, one post per Page publishes each weekday at 09:00. Saving does not start a publishing job.</p></div></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Required Campaign Schedule</p><h2>Set campaign start and end</h2><p>Posts are distributed evenly between these date-times. The campaign activates automatically at the start time.</p></div></div>
         <form id="ah-publishing-settings-form">
           <div class="ah-check-grid">
-            <label class="ah-check-field"><input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>Enable auto publishing when campaign is explicitly started</label>
             <label class="ah-check-field"><input type="checkbox" name="automaticApproval" ${settings.automaticApproval ? "checked" : ""}>Automatically approve generated posts</label>
             <label class="ah-check-field"><input type="checkbox" name="roundRobin" ${settings.roundRobin !== false ? "checked" : ""}>Rotate Pages in the queue</label>
             <label class="ah-check-field"><input type="checkbox" name="repeatResources" ${settings.repeatResources !== false ? "checked" : ""}>Cycle through selected links and images</label>
-            <label class="ah-check-field"><input type="checkbox" name="weekendPublishing" ${settings.weekendPublishing ? "checked" : ""}>Allow weekend publishing</label>
+            <label class="ah-check-field"><input type="checkbox" checked disabled>Saturday and Sunday publishing (required)</label>
           </div>
           <div class="ah-form-grid">
             <label class="ah-field">Timezone<input name="timezone" maxlength="100" value="${escapeHtml(settings.timezone)}" placeholder="Asia/Kolkata" required></label>
-            <label class="ah-field">Daily starting time<input type="time" name="allowedStart" value="${escapeHtml(settings.allowedHours?.start || "09:00")}" required></label>
-            <label class="ah-field">Daily stop time<input type="time" name="allowedEnd" value="${escapeHtml(settings.allowedHours?.end || "10:00")}" required></label>
+            <label class="ah-field">Start Date and Time<input type="datetime-local" name="startAt" value="${escapeHtml(settings.startAt || defaults.startAt)}" required></label>
+            <label class="ah-field">End Date and Time<input type="datetime-local" name="endAt" value="${escapeHtml(settings.endAt || defaults.endAt)}" required></label>
             <label class="ah-field">Retries after first attempt<select name="retryAttempts">${[0, 1, 2, 3, 4, 5].map(value => `<option value="${value}" ${Number(settings.retryAttempts) === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
             <label class="ah-field">Retry delay (minutes)<input type="number" name="retryDelayMinutes" min="1" max="1440" value="${escapeHtml(settings.retryDelayMinutes || 5)}" required></label>
           </div>
-          <section class="ah-schedule-editor">
-            <div class="ah-panel-heading"><div><h3>Publishing days</h3><p>Each enabled day starts at the configured daily starting time.</p></div></div>
-            <div class="ah-day-grid">${dayCards}</div>
-          </section>
+          <div class="ah-inline-note">Saturday and Sunday are always included. Posts are spread across all calendar days; use the interval and daily limit controls below to cap each Page.</div>
           <section class="ah-page-settings">
-            <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>Posts repeat at the selected interval until the daily stop time or daily limit.</p></div></div>
+            <div class="ah-panel-heading"><div><h3>Per-Page intervals and limits</h3><p>These controls limit how closely posts can be scheduled and the maximum per Page per day.</p></div></div>
             ${pageRows || `<div class="ah-empty">Select Facebook Pages before setting Page-specific limits.</div>`}
           </section>
-          <div class="ah-form-footer"><span>Auto publishing starts only after a separate campaign-start action.</span><div class="ah-form-actions"><button type="submit" class="ah-button">Save publishing settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="continue-campaign-review">Skip to Review &amp; Activate →</button></div></div>
+          <div class="ah-form-footer"><span>Save these required settings, then review and schedule the campaign.</span><div class="ah-form-actions"><button type="submit" class="ah-button">Save Schedule Settings</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="save-schedule-and-review">Save &amp; Review Schedule →</button></div></div>
         </form>
       </section>`;
     const form = root.querySelector("#ah-publishing-settings-form");
     form.addEventListener("input", () => { state.publishingSettingsDraft = collectPublishingSettings(form); });
-    form.addEventListener("change", event => {
-      state.publishingSettingsDraft = collectPublishingSettings(form);
-      if (event.target.name === "weekendPublishing" && !event.target.checked) {
-        state.publishingSettingsDraft.scheduleDays.Saturday = { enabled: false, times: [] };
-        state.publishingSettingsDraft.scheduleDays.Sunday = { enabled: false, times: [] };
-        renderPublishingSettings();
-      }
-    });
+    form.addEventListener("change", () => { state.publishingSettingsDraft = collectPublishingSettings(form); });
   }
 
   function renderCampaignReview() {
@@ -699,10 +759,10 @@
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.campaigns.length > 1 ? `<label class="ah-review-campaign-picker">Campaign to review<select id="ah-review-campaign">${state.campaigns.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === campaign.id ? "selected" : ""}>${escapeHtml(item.campaignName)} · ${escapeHtml(item.status)}</option>`).join("")}</select></label>` : ""}
       <section class="ah-panel ah-workflow-panel">
-        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 9 · Campaign Review &amp; Activate</p><h2>Review ${escapeHtml(campaign.campaignName)}</h2><p>Only an authorized Page and article link are required. Images, AI captions, matching previews, and custom schedule settings are optional.</p></div><span class="ah-status ${readiness?.ready ? "ah-status-ready" : ""}">${readiness?.ready ? "Ready" : escapeHtml(campaign.status)}</span></div>
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 9 · Campaign Review &amp; Schedule</p><h2>Review ${escapeHtml(campaign.campaignName)}</h2><p>An authorized Page, article link, and saved campaign schedule are required. Captions and images remain optional.</p></div><span class="ah-status ${readiness?.ready ? "ah-status-ready" : ""}">${readiness?.ready ? "Ready" : escapeHtml(campaign.status)}</span></div>
         <div class="ah-readiness-list">${checks.length ? checks.map(item => `<article class="ah-readiness-row ${item.ready ? "ready" : "blocked"}"><span aria-hidden="true">${item.ready ? "✓" : "!"}</span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.message)}</p></div></article>`).join("") : `<div class="ah-empty">${state.readinessError ? "Readiness checks could not be loaded." : "Loading campaign checks…"}</div>`}</div>
         ${readiness?.schedulePreview ? `<div class="ah-inline-note">${readiness.schedulePreview.postCount} post(s) fit the selected dates and limits. Next scheduled post: ${escapeHtml(formatScheduledTime(readiness.schedulePreview.nextPostAt, campaign.publishingSettings?.timezone || campaign.timezone))}.</div>` : ""}
-        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="refresh-readiness">Run checks again</button><button type="button" class="ah-button" data-ah-action="activate-campaign" ${readiness?.ready ? "" : "disabled"}>Activate Campaign</button></div>
+        <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="edit-campaign-step" data-view="publishing-settings">Set Required Schedule</button><button type="button" class="ah-button ah-button-secondary" data-ah-action="refresh-readiness">Run checks again</button><button type="button" class="ah-button" data-ah-action="activate-campaign" ${readiness?.ready ? "" : "disabled"}>Schedule Campaign</button></div>
       </section>`;
   }
 
@@ -731,6 +791,9 @@
   }
 
   function campaignControlButtons(campaign) {
+    if (campaign.status === "scheduled") {
+      return `<button type="button" class="ah-button ah-button-danger" data-ah-action="control-campaign" data-control-action="stop">Cancel scheduled campaign</button>`;
+    }
     if (campaign.status === "active") {
       return `<button type="button" class="ah-button ah-button-secondary" data-ah-action="control-campaign" data-control-action="pause">Pause campaign</button><button type="button" class="ah-button ah-button-danger" data-ah-action="control-campaign" data-control-action="stop">Stop campaign</button>`;
     }
@@ -752,6 +815,10 @@
     const pending = posts.filter(post => ["scheduled", "publishing"].includes(post.status));
     const failed = posts.filter(post => post.status === "failed");
     const cancelled = posts.filter(post => post.status === "cancelled");
+    const activityPosts = posts
+      .filter(post => ["published", "publishing", "failed"].includes(post.status))
+      .sort((left, right) => Date.parse(right.publishedAt || right.updatedAt || right.scheduledAt) -
+        Date.parse(left.publishedAt || left.updatedAt || left.scheduledAt));
     const title = {
       "auto-publishing": "Automatic Processing",
       "publishing-queue": "Publishing Queue",
@@ -805,7 +872,7 @@
       ? `${schedule.status} · ${posts.length} total post(s) · ${pending.length} queued · ${published.length} published · ${failed.length} failed`
       : `${campaign.status} · No publishing schedule exists yet`;
     const processingNote = view === "auto-publishing"
-      ? "The worker checks due posts every 30 seconds, publishes uploaded images through Meta, and records the result. Retry settings from Step 8 apply to this campaign."
+      ? "The worker activates this campaign at its start time, checks due posts every 30 seconds, and records each publishing result."
       : view === "facebook-publishing"
         ? "Posts are sent to Facebook automatically at their scheduled times. A Meta post ID appears when Facebook confirms publication."
         : view === "publishing-history"
@@ -825,9 +892,10 @@
         <p class="ah-inline-note">${escapeHtml(statusLine)}</p>
         <div class="ah-form-actions"><button type="button" class="ah-button ah-button-secondary" data-ah-action="refresh-operations">Refresh queue</button>${campaignControlButtons(campaign)}</div>
         ${state.operationsLoading && !schedule ? `<div class="ah-empty">Loading queue…</div>` : ""}
-        ${view === "auto-publishing" && !schedule ? `<div class="ah-inline-warning">Activate this campaign from Step 9 after every readiness check passes.</div>` : ""}
+        ${view === "auto-publishing" && !schedule ? `<div class="ah-inline-warning">Schedule this campaign from Step 9 after every readiness check passes.</div>` : ""}
         <div class="ah-panel-heading"><div><h3>${view === "facebook-publishing" ? "Facebook results" : view === "publishing-history" ? "Campaign history" : view === "auto-publishing" ? "Next scheduled posts" : "Queued posts"}</h3><p>${viewPosts.length} post(s) shown.</p></div></div>
         ${renderSchedulePostTable(viewPosts)}
+        ${view === "auto-publishing" ? `<section class="ah-active-logs"><div class="ah-panel-heading"><div><h3>Active publishing logs</h3><p>Latest publishing attempts and confirmed posts update automatically.</p></div></div>${activityPosts.length ? renderSchedulePostTable(activityPosts.slice(0, 30)) : `<div class="ah-empty">No posts have started publishing yet. This log will update when the campaign reaches its start time.</div>`}</section>` : ""}
       </section>
       ${view === "settings" ? `<section class="ah-panel ah-management-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 14 · Campaign Management</p><h2>Manage campaign settings and resources</h2><p>Pause or stop the live queue before changing Pages, URLs, images, AI content, or publishing rules.</p></div></div>
@@ -867,6 +935,9 @@
     try {
       try {
         state.schedule = await request(`/api/scheduler/${encodeURIComponent(campaign.id)}`);
+        if (campaign.status === "scheduled" && state.schedule.status !== "scheduled") {
+          campaign.status = state.schedule.status;
+        }
       } catch (error) {
         state.schedule = null;
         if (error.message !== "Schedule not found.") throw error;
@@ -894,7 +965,9 @@
       Object.assign(campaign, result.campaign);
       state.schedule = result.schedule;
       state.activationReadiness = result.readiness;
-      state.workflowMessage = "Campaign activated. Article links are queued; optional captions and images were used when available.";
+      state.workflowMessage = result.campaign.status === "scheduled"
+        ? `Campaign scheduled. It will activate at ${formatScheduledTime(result.schedule.activationAt, campaign.publishingSettings?.timezone || campaign.timezone)}.`
+        : "Campaign activated. Article links are queued; optional captions and images were used when available.";
       showView("auto-publishing");
       void loadOperations();
     } catch (error) {
@@ -903,20 +976,6 @@
       if (error.readiness) state.activationReadiness = error.readiness;
       renderCampaignReview();
     }
-  }
-
-  async function directActivateCampaign(campaignId, button) {
-    state.activeCampaignId = campaignId;
-    state.activationReadiness = null;
-    state.readinessError = "";
-    state.workflowMessage = "Activating with selected Pages and article links. Optional images, captions, and schedule settings are skipped.";
-    setActiveModule("campaign-review");
-    renderCampaignReview();
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Checking & activating…";
-    }
-    await activateCampaign();
   }
 
   async function controlCampaign(action) {
@@ -975,15 +1034,8 @@
 
   function collectPublishingSettings(form) {
     const values = new FormData(form);
-    const current = state.publishingSettingsDraft || getActiveCampaign()?.publishingSettings || defaultPublishingSettings(getActiveCampaign());
-    const scheduleDays = {};
-    for (const day of ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]) {
-      const dayControl = form.querySelector(`[data-schedule-day="${day}"]`);
-      scheduleDays[day] = {
-        enabled: dayControl ? dayControl.checked : Boolean(current.scheduleDays?.[day]?.enabled),
-        times: []
-      };
-    }
+    const scheduleDays = Object.fromEntries(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+      .map(day => [day, { enabled: true, times: [] }]));
     const pageSettings = {};
     for (const page of getActiveCampaign()?.pages || []) {
       pageSettings[page.id] = {
@@ -992,13 +1044,14 @@
       };
     }
     return {
-      enabled: form.elements.enabled.checked,
+      enabled: true,
       automaticApproval: form.elements.automaticApproval.checked,
       roundRobin: form.elements.roundRobin.checked,
       repeatResources: form.elements.repeatResources.checked,
-      weekendPublishing: form.elements.weekendPublishing.checked,
+      weekendPublishing: true,
       timezone: values.get("timezone"),
-      allowedHours: { start: values.get("allowedStart"), end: values.get("allowedEnd") },
+      startAt: values.get("startAt"),
+      endAt: values.get("endAt"),
       scheduleDays,
       pageSettings,
       retryAttempts: Number(values.get("retryAttempts")),
@@ -1141,32 +1194,34 @@
     }
   }
 
-  async function saveArticleUrls(nextView = "", activateAfterSave = false) {
+  async function saveArticleUrls(nextView = "") {
     const campaign = getActiveCampaign();
-    const button = root.querySelector(activateAfterSave
-      ? '[data-ah-action="save-articles-and-activate"]'
-      : nextView
-        ? '[data-ah-action="save-articles-and-images"]'
-        : '[data-ah-action="save-articles"]');
-    button.disabled = true;
+    const button = root.querySelector(nextView
+      ? nextView === "publishing-settings"
+        ? '[data-ah-action="save-articles-and-schedule"]'
+        : '[data-ah-action="save-articles-and-images"]'
+      : '[data-ah-action="save-articles"]');
+    if (button) button.disabled = true;
     let saved = false;
     try {
       const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
         method: "PATCH",
-        body: JSON.stringify({ articleUrls: campaign.articleUrls || [], currentStep: Math.max(Number(campaign.currentStep || 3), 4) })
+        body: JSON.stringify({
+          articleUrls: campaign.articleUrls || [],
+          commonHashtags: root.querySelector("#ah-common-hashtags")?.value || "",
+          currentStep: Math.max(Number(campaign.currentStep || 3), 4)
+        })
       });
       Object.assign(campaign, updated);
-      state.workflowMessage = "Article list saved to this campaign draft.";
+      state.workflowMessage = "Article list and common hashtags saved to this campaign draft.";
       saved = true;
     } catch (error) {
       state.workflowMessage = error.message;
     }
     if (saved && nextView) {
-      showView(nextView, "Article list saved. Continue with campaign images.");
-      return;
-    }
-    if (saved && activateAfterSave) {
-      await directActivateCampaign(campaign.id);
+      showView(nextView, nextView === "publishing-settings"
+        ? "Links and common hashtags saved. Configure the required campaign schedule."
+        : "Article list saved. Continue with campaign images.");
       return;
     }
     if (state.currentView === "url-library" && state.activeCampaignId === campaign.id) renderUrlLibrary();
@@ -1240,6 +1295,7 @@
     if (state.currentView === "image-library") renderImageLibrary();
     else if (state.currentView === "smart-matching") renderSmartMatching();
     else if (state.currentView === "ai-settings") renderAiSettings();
+    else if (state.currentView === "post-preview") renderPostPreview();
   }
 
   function getImageUploadDetails() {
@@ -1374,8 +1430,8 @@
   async function saveImageSelection(nextView = "") {
     const campaign = getActiveCampaign();
     const imageIds = [...state.imageSelection];
-    const action = nextView === "campaign-review"
-      ? "save-image-selection-and-activate"
+    const action = nextView === "publishing-settings"
+      ? "save-image-selection-and-schedule"
       : nextView
         ? "save-image-selection-and-match"
         : "save-image-selection";
@@ -1392,12 +1448,7 @@
       if (nextView) {
         state.imageFolder = "";
         state.imageSearch = "";
-        if (nextView === "campaign-review") {
-          await directActivateCampaign(campaign.id);
-          return;
-        }
-
-        showView(nextView, "Images saved. Resource matching is optional.");
+        showView(nextView, "Images saved. Configure the required campaign schedule before scheduling.");
         return;
       }
     } catch (error) {
@@ -1605,7 +1656,22 @@
     if (state.currentView === "ai-settings") renderAiSettings();
   }
 
-  async function savePublishingSettings() {
+  async function approveAllCampaignPosts() {
+    const campaign = getActiveCampaign();
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}/ai-content/approve-all`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      Object.assign(campaign, updated);
+      state.workflowMessage = "All generated campaign posts are approved.";
+    } catch (error) {
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "ai-settings") renderAiSettings();
+  }
+
+  async function savePublishingSettings(reviewAfterSave = false) {
     const campaign = getActiveCampaign();
     const form = root.querySelector("#ah-publishing-settings-form");
     const button = form?.querySelector('button[type="submit"]');
@@ -1619,7 +1685,13 @@
       });
       Object.assign(campaign, updated);
       state.publishingSettingsDraft = updated.publishingSettings;
-      state.workflowMessage = "Publishing settings saved. No posts have been scheduled or published.";
+      state.workflowMessage = "Required campaign schedule saved. Review the campaign to create its publishing queue.";
+      if (reviewAfterSave) {
+        state.activationReadiness = null;
+        state.readinessError = "";
+        showView("campaign-review");
+        return;
+      }
     } catch (error) {
       state.publishingSettingsDraft = publishingSettings;
       state.workflowMessage = error.message;
@@ -1649,6 +1721,9 @@
       void loadImageLibrary();
     } else if (view === "ai-settings") {
       renderAiSettings();
+      void loadImageLibrary();
+    } else if (view === "post-preview") {
+      renderPostPreview();
       void loadImageLibrary();
     } else if (view === "publishing-settings") renderPublishingSettings();
     else if (view === "campaign-review") {
@@ -1745,7 +1820,7 @@
       state.analyticsDashboard = null;
       const view = action === "choose-campaign"
         ? control.dataset.view
-        : ["active", "paused"].includes(campaign.status)
+        : ["active", "paused", "scheduled"].includes(campaign.status)
           ? "auto-publishing"
           : campaign.status === "stopped" ? "settings" : getResumeView(campaign);
       showView(view);
@@ -1755,8 +1830,6 @@
       state.readinessError = "";
       state.workflowMessage = "";
       showView("campaign-review");
-    } else if (action === "direct-activate") {
-      void directActivateCampaign(control.dataset.campaignId, control);
     } else if (action === "reload-pages") {
       void loadFacebookPages();
     } else if (action === "select-visible-pages") {
@@ -1809,8 +1882,8 @@
       void saveArticleUrls();
     } else if (action === "save-articles-and-images") {
       void saveArticleUrls("image-library");
-    } else if (action === "save-articles-and-activate") {
-      void saveArticleUrls("", true);
+    } else if (action === "save-articles-and-schedule") {
+      void saveArticleUrls("publishing-settings");
     } else if (action === "save-image-metadata") {
       void saveImageMetadata(control.dataset.imageId);
     } else if (action === "delete-image") {
@@ -1819,8 +1892,8 @@
       void saveImageSelection();
     } else if (action === "save-image-selection-and-match") {
       void saveImageSelection("smart-matching");
-    } else if (action === "save-image-selection-and-activate") {
-      void saveImageSelection("campaign-review");
+    } else if (action === "save-image-selection-and-schedule") {
+      void saveImageSelection("publishing-settings");
     } else if (action === "open-image-folder") {
       state.imageFolder = control.dataset.folderPath || "";
       state.imageSearch = "";
@@ -1843,12 +1916,23 @@
       void generateAllCampaignCaptions();
     } else if (action === "toggle-post-approval") {
       void togglePostApproval(control.dataset.contentId, control.dataset.nextStatus);
+    } else if (action === "approve-all-posts") {
+      void approveAllCampaignPosts();
+    } else if (action === "preview-device") {
+      state.previewDevice = control.dataset.device === "laptop" ? "laptop" : "mobile";
+      renderPostPreview();
+    } else if (action === "ai-settings") {
+      showView("ai-settings");
     } else if (action === "refresh-readiness") {
       void loadActivationReadiness();
     } else if (action === "activate-campaign") {
       void activateCampaign();
     } else if (action === "continue-campaign-review") {
       showView("campaign-review");
+    } else if (action === "continue-campaign-schedule") {
+      showView("publishing-settings");
+    } else if (action === "save-schedule-and-review") {
+      void savePublishingSettings(true);
     } else if (action === "refresh-operations") {
       void loadOperations();
     } else if (action === "control-campaign") {
@@ -1887,6 +1971,9 @@
       state.workflowMessage = "";
       renderCampaignReview();
       void loadActivationReadiness();
+    } else if (target.id === "ah-preview-post") {
+      state.previewContentId = target.value;
+      renderPostPreview();
     } else if (target.id === "ah-url-file" && target.files[0]) {
       void importArticleFile(target.files[0]);
     } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {
@@ -1949,7 +2036,7 @@
     else if (state.currentView === "facebook-pages") void loadFacebookPages();
     else if (state.currentView === "url-library") renderUrlLibrary();
     else if (state.currentView === "image-library") void loadImageLibrary();
-    else if (state.currentView === "smart-matching" || state.currentView === "ai-settings") void loadImageLibrary();
+    else if (state.currentView === "smart-matching" || state.currentView === "ai-settings" || state.currentView === "post-preview") void loadImageLibrary();
     else if (state.currentView === "publishing-settings") renderPublishingSettings();
     else if (state.currentView === "campaign-review") void loadActivationReadiness();
     else if (["auto-publishing", "publishing-queue", "facebook-publishing", "publishing-history", "analytics", "settings"].includes(state.currentView)) void loadOperations();

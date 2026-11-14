@@ -176,6 +176,7 @@ async function runDuePosts() {
     if (workerBusy) return;
     workerBusy = true;
     try {
+        router.activateDueAutomaticSchedules();
         await schedulerWorker.processDuePosts(schedules, {
             publishPost: publishScheduledPost,
             persist: persistSchedules,
@@ -208,6 +209,36 @@ setTimeout(() => {
 
 router.getSchedulesForWorkspace = workspaceScopeId =>
     schedules.filter(schedule => schedule.workspaceScopeId === workspaceScopeId);
+router.activateDueAutomaticSchedules = (now = Date.now()) => {
+    const campaignRoute = require("./automatic-campaigns.js").default;
+    for (const schedule of schedules) {
+        if (schedule.source !== "automatic-campaign" ||
+            schedule.status !== "scheduled" ||
+            new Date(schedule.activationAt).getTime() > now) continue;
+
+        const previousUpdatedAt = schedule.updatedAt;
+        schedule.status = "active";
+        schedule.updatedAt = new Date(now).toISOString();
+        if (!persistSchedules()) {
+            schedule.status = "scheduled";
+            schedule.updatedAt = previousUpdatedAt;
+            console.error("[scheduler] scheduled campaign activation could not be saved", schedule.campaignId);
+            continue;
+        }
+        if (!campaignRoute.updateScheduledCampaignStatus(
+            schedule.campaignId,
+            schedule.workspaceScopeId,
+            schedule.updatedAt
+        )) {
+            console.error("[scheduler] scheduled campaign status could not be updated", schedule.campaignId);
+            schedule.status = "scheduled";
+            schedule.updatedAt = previousUpdatedAt;
+            if (!persistSchedules()) {
+                console.error("[scheduler] scheduled campaign activation rollback could not be saved", schedule.campaignId);
+            }
+        }
+    }
+};
 router.createAutomaticCampaignSchedule = ({ campaign, workspaceScopeId, now = Date.now() }) => {
     if (!campaign || !workspaceScopeId) throw new Error("Campaign and workspace are required to create a schedule.");
     const existing = findCampaignSchedule(campaign.id, workspaceScopeId);
@@ -222,12 +253,14 @@ router.createAutomaticCampaignSchedule = ({ campaign, workspaceScopeId, now = Da
     });
     assertNoPageConflicts(generated, workspaceScopeId, existing);
     const timestamp = new Date(now).toISOString();
+    const activationAt = generated.settings.startAt;
     const schedule = {
         id: randomUUID(),
         campaignId: campaign.id,
         workspaceScopeId,
         source: "automatic-campaign",
-        status: "active",
+        status: new Date(activationAt).getTime() > now ? "scheduled" : "active",
+        activationAt,
         settings: generated.settings,
         pages: generated.pages,
         posts: generated.posts.map(post => ({
@@ -271,7 +304,7 @@ router.controlAutomaticCampaignSchedule = (campaignId, workspaceScopeId, action)
     } else if (action === "resume" && schedule.status === "paused") {
         assertNoPageConflicts(schedule, workspaceScopeId, schedule);
         schedule.status = "active";
-    } else if (action === "stop" && ["active", "paused"].includes(schedule.status)) {
+    } else if (action === "stop" && ["active", "paused", "scheduled"].includes(schedule.status)) {
         schedule.status = "stopped";
         for (const post of schedule.posts) {
             if (post.status === "draft" || post.status === "scheduled") {

@@ -137,25 +137,22 @@ function validateArticleUrls(value) {
     });
 }
 
-function defaultPublishingSettings(campaign, selectedPages) {
-    const scheduleDays = Object.fromEntries(
-        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-            .map(day => [day, { enabled: !["Saturday", "Sunday"].includes(day), times: [] }])
-    );
-    return validatePublishingSettings({
-        enabled: true,
-        automaticApproval: true,
-        roundRobin: true,
-        repeatResources: true,
-        timezone: campaign.timezone || "Asia/Kolkata",
-        allowedHours: { start: "09:00", end: "10:00" },
-        weekendPublishing: false,
-        scheduleDays,
-        pageSettings: Object.fromEntries(selectedPages.map(page =>
-            [page.id, { intervalMinutes: 60, dailyPostLimit: 1 }])),
-        retryAttempts: 3,
-        retryDelayMinutes: 5
-    }, selectedPages, campaign.timezone || "Asia/Kolkata");
+function validateCommonHashtags(value) {
+    if (typeof value !== "string" && !Array.isArray(value)) {
+        throw new Error("Common hashtags must be entered as text.");
+    }
+    const source = Array.isArray(value) ? value.join(" ") : value;
+    const entries = source.trim().split(/\s+/).filter(Boolean);
+    if (entries.length > 30) throw new Error("Add no more than 30 common hashtags.");
+    const normalized = [];
+    for (const entry of entries) {
+        const tag = entry.startsWith("#") ? entry : `#${entry}`;
+        if (!/^#[\p{L}\p{N}_]{1,80}$/u.test(tag)) {
+            throw new Error(`"${entry}" is not a valid hashtag. Use letters, numbers, and underscores.`);
+        }
+        if (!normalized.includes(tag)) normalized.push(tag);
+    }
+    return normalized;
 }
 
 function getScheduleCampaign(campaign, workspaceScopeId) {
@@ -248,28 +245,21 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
 
     let publishingSettings;
     let publishingSettingsError = "";
-    const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
+    const hasSavedPublishingSettings = Boolean(campaign.publishingSettings);
     try {
-        publishingSettings = validatePublishingSettings(
-            usesDefaultPublishingSettings
-                ? defaultPublishingSettings(campaign, selectedPages)
-                : campaign.publishingSettings,
-            selectedPages,
-            campaign.timezone
-        );
+        if (!hasSavedPublishingSettings) throw new Error("Save required campaign scheduling settings before activation.");
+        publishingSettings = validatePublishingSettings(campaign.publishingSettings, selectedPages, campaign.timezone);
     } catch (error) {
         publishingSettingsError = error.message;
     }
     check("Publishing settings", Boolean(publishingSettings && publishingSettings.enabled), publishingSettingsError ||
-        (usesDefaultPublishingSettings
-            ? "A safe default of one weekday post per Page at 09:00 will be used on activation."
-            : "Saved publishing settings are valid and auto publishing is enabled."));
+        "Required campaign scheduling settings are saved.");
 
     const datesReady = validDate(campaign.startDate) && validDate(campaign.endDate) &&
         campaign.endDate >= campaign.startDate;
     check("Campaign dates", datesReady, datesReady
         ? `${campaign.startDate} through ${campaign.endDate}.`
-        : "Set a valid campaign date range with the end date on or after the start date.");
+        : "Save valid Start and End Date-Time values in required schedule settings.");
 
     const contentReady = articlesReady;
     check("Article link publishing", contentReady, contentReady
@@ -299,7 +289,7 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     check("Future publishing slots", Boolean(schedulePreview), scheduleError ||
         `${schedulePreview?.postCount || 0} post(s) fit the selected dates and Page limits.`);
 
-    const campaignCanStart = !["active", "paused"].includes(campaign.status);
+    const campaignCanStart = !["active", "paused", "scheduled"].includes(campaign.status);
     check("Campaign status", campaignCanStart, campaignCanStart
         ? "This campaign can be activated."
         : "Pause or stop the running campaign before activating it again.");
@@ -470,6 +460,19 @@ router.get("/:id/readiness", (req, res) => {
     res.json(getActivationReadiness(campaign, req.workspaceScopeId));
 });
 
+router.updateScheduledCampaignStatus = (campaignId, workspaceScopeId, activatedAt) => {
+    const campaign = campaigns.find(item =>
+        item.id === campaignId && item.workspaceScopeId === workspaceScopeId && item.status === "scheduled");
+    if (!campaign) return false;
+    const previous = { status: campaign.status, activatedAt: campaign.activatedAt, updatedAt: campaign.updatedAt };
+    campaign.status = "active";
+    campaign.activatedAt = activatedAt;
+    campaign.updatedAt = activatedAt;
+    if (persistCampaigns()) return true;
+    Object.assign(campaign, previous);
+    return false;
+};
+
 router.post("/:id/activate", async (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
@@ -480,14 +483,7 @@ router.post("/:id/activate", async (req, res) => {
         const previous = { ...campaign };
         try {
             const scheduleCampaign = getScheduleCampaign(campaign, req.workspaceScopeId);
-            const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
-            const publishingSettings = validatePublishingSettings(
-                usesDefaultPublishingSettings
-                    ? defaultPublishingSettings(campaign, campaign.pages || [])
-                    : campaign.publishingSettings,
-                campaign.pages || [],
-                campaign.timezone
-            );
+            const publishingSettings = validatePublishingSettings(campaign.publishingSettings, campaign.pages || [], campaign.timezone);
             Object.assign(campaign, {
                 imageIds: scheduleCampaign.imageIds,
                 resourceAssignments: scheduleCampaign.resourceAssignments,
@@ -544,10 +540,11 @@ router.post("/:id/activate", async (req, res) => {
         }
 
         const activatedAt = new Date().toISOString();
+        const scheduled = schedule.status === "scheduled";
         Object.assign(campaign, {
-            status: "active",
+            status: scheduled ? "scheduled" : "active",
             scheduleId: schedule.id,
-            activatedAt,
+            ...(scheduled ? { scheduledAt: schedule.activationAt } : { activatedAt }),
             updatedAt: activatedAt
         });
         if (!persistCampaigns()) {
@@ -568,6 +565,9 @@ router.post("/:id/control", (req, res) => {
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
     const action = String(req.body?.action || "");
+    if (campaign.status === "scheduled" && action !== "stop") {
+        return res.status(409).json({ error: "A scheduled campaign can only be cancelled before its start time." });
+    }
     const nextStatus = { pause: "paused", resume: "active", stop: "stopped" }[action];
     if (!nextStatus) return res.status(400).json({ error: "Choose pause, resume, or stop." });
 
@@ -609,6 +609,7 @@ router.post("/", (req, res) => {
         imageUsageHistory: [],
         matchingHistory: [],
         resourceAssignments: [],
+        commonHashtags: [],
         aiContent: [],
         aiGenerationLog: [],
         currentStep: 3,
@@ -633,8 +634,8 @@ router.patch("/:id", (req, res) => {
         res.status(404).json({ error: "Campaign not found." });
         return;
     }
-    if (["active", "paused"].includes(campaign.status) &&
-        ["pages", "articleUrls", "imageIds", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled"]
+    if (["active", "paused", "scheduled"].includes(campaign.status) &&
+        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled"]
             .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
         return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
@@ -650,6 +651,9 @@ router.patch("/:id", (req, res) => {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "articleUrls")) {
             updates.articleUrls = validateArticleUrls(req.body.articleUrls);
             invalidatesPlan = invalidatesPlan || JSON.stringify(updates.articleUrls) !== JSON.stringify(campaign.articleUrls || []);
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "commonHashtags")) {
+            updates.commonHashtags = validateCommonHashtags(req.body.commonHashtags);
         }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "imageIds")) {
             updates.imageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, req.body.imageIds);
@@ -670,6 +674,8 @@ router.patch("/:id", (req, res) => {
                 updates.pages || campaign.pages || [],
                 campaign.timezone
             );
+            updates.startDate = updates.publishingSettings.startAt.slice(0, 10);
+            updates.endDate = updates.publishingSettings.endAt.slice(0, 10);
             if (updates.publishingSettings.automaticApproval) {
                 updates.aiContent = (campaign.aiContent || []).map(content =>
                     content.status === "draft" ? { ...content, status: "approved" } : content
@@ -870,11 +876,34 @@ router.post("/:id/ai-content/generate", async (req, res) => {
     }
 });
 
+router.post("/:id/ai-content/approve-all", (req, res) => {
+    if (!requireEncryptedPersistence(res)) return;
+    const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found." });
+    if (["active", "paused", "scheduled"].includes(campaign.status)) {
+        return res.status(409).json({ error: "Stop this campaign before changing post approvals." });
+    }
+    if (!Array.isArray(campaign.aiContent) || !campaign.aiContent.length) {
+        return res.status(409).json({ error: "Generate campaign captions before approving posts." });
+    }
+    const previous = campaign.aiContent;
+    const updatedAt = new Date().toISOString();
+    campaign.aiContent = campaign.aiContent.map(content =>
+        content.status === "approved" ? content : { ...content, status: "approved", updatedAt }
+    );
+    campaign.updatedAt = updatedAt;
+    if (!persistCampaigns()) {
+        campaign.aiContent = previous;
+        return res.status(500).json({ error: "Campaign posts could not be approved." });
+    }
+    return res.json(campaign);
+});
+
 router.patch("/:id/ai-content/:contentId/approval", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
-    if (["active", "paused"].includes(campaign.status)) {
+    if (["active", "paused", "scheduled"].includes(campaign.status)) {
         return res.status(409).json({ error: "Stop this campaign before changing post approvals." });
     }
     const content = (campaign.aiContent || []).find(item => item.id === req.params.contentId);

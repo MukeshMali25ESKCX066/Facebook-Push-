@@ -67,12 +67,12 @@ test("supports a single shared article link and no images", () => {
 
 test("validates the saved publishing schedule and per-Page limits", () => {
     const result = validatePublishingSettings({
-        enabled: false,
+        enabled: true,
         automaticApproval: true,
         roundRobin: true,
         timezone: "Asia/Kolkata",
-        allowedHours: { start: "09:00", end: "21:00" },
-        weekendPublishing: false,
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-30T21:00",
         scheduleDays: {
             Monday: { enabled: true, times: ["09:00", "17:00"] }
         },
@@ -80,25 +80,38 @@ test("validates the saved publishing schedule and per-Page limits", () => {
         retryAttempts: 3,
         retryDelayMinutes: 5
     }, pages, "UTC");
-    assert.equal(result.enabled, false);
+    assert.equal(result.enabled, true);
     assert.equal(result.pageSettings["page-a"].intervalMinutes, 5);
     assert.equal(result.pageSettings["page-a"].dailyPostLimit, 500);
     assert.deepEqual(result.pageSettings["page-b"], { intervalMinutes: 120, dailyPostLimit: 4 });
     assert.throws(() => validatePublishingSettings({
+        enabled: true,
         timezone: "UTC",
-        allowedHours: { start: "09:00", end: "21:00" },
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-30T21:00",
         pageSettings: { "page-a": { intervalMinutes: 5, dailyPostLimit: 501 } }
     }, pages), /between 1 and 500/);
     assert.throws(() => validatePublishingSettings({
+        enabled: true,
         timezone: "Not/A-Timezone",
-        allowedHours: { start: "09:00", end: "21:00" }
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-30T21:00"
     }, pages), /valid IANA timezone/);
+    assert.equal(result.weekendPublishing, true);
+    assert.equal(result.scheduleDays.Saturday.enabled, true);
+    assert.equal(result.scheduleDays.Sunday.enabled, true);
     assert.throws(() => validatePublishingSettings({
+        enabled: false,
         timezone: "UTC",
-        allowedHours: { start: "09:00", end: "21:00" },
-        weekendPublishing: false,
-        scheduleDays: { Sunday: { enabled: true, times: ["10:00"] } }
-    }, pages), /Enable weekend publishing/);
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-30T21:00"
+    }, pages), /Enable campaign scheduling/);
+    assert.throws(() => validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-30T21:00",
+        endAt: "2026-11-15T09:00"
+    }, pages), /must be after/);
 });
 
 test("builds a fixed-interval queue within daily times and per-Page limits", () => {
@@ -136,8 +149,8 @@ test("builds a fixed-interval queue within daily times and per-Page limits", () 
         automaticApproval: false,
         roundRobin: true,
         timezone: "Asia/Kolkata",
-        allowedHours: { start: "09:00", end: "21:00" },
-        weekendPublishing: true,
+        startAt: "2026-11-13T09:00",
+        endAt: "2026-11-14T09:00",
         scheduleDays: {
             Friday: { enabled: true, times: ["09:00", "12:00"] },
             Saturday: { enabled: true, times: ["09:00"] }
@@ -158,7 +171,7 @@ test("builds a fixed-interval queue within daily times and per-Page limits", () 
     assert.equal(schedule.posts.length, 8);
     assert.equal(schedule.posts[0].scheduledAt, "2026-11-13T03:30:00.000Z");
     assert.equal(schedule.posts[1].scheduledAt, "2026-11-13T03:30:00.000Z");
-    assert.equal(schedule.posts[2].scheduledAt, "2026-11-13T05:30:00.000Z");
+    assert.equal(schedule.posts[2].scheduledAt, "2026-11-13T11:30:00.000Z");
     assert.ok(schedule.posts.every(post => post.status === "scheduled" && post.libraryImageId));
     assert.equal(schedule.settings.retryAttempts, 2);
     assert.equal(schedule.pages[0].minimumGapMinutes, 120);
@@ -190,8 +203,8 @@ test("schedules preview mode through the preview URL without attaching the libra
     const settings = validatePublishingSettings({
         enabled: true,
         timezone: "UTC",
-        allowedHours: { start: "09:00", end: "10:00" },
-        scheduleDays: { Friday: { enabled: true } },
+        startAt: "2026-11-13T09:00",
+        endAt: "2026-11-13T10:00",
         pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } },
         repeatResources: false
     }, [pages[0]]);
@@ -242,8 +255,8 @@ test("publishes at fixed five-minute intervals and repeats assigned resources wh
         automaticApproval: false,
         repeatResources: true,
         timezone: "Asia/Kolkata",
-        allowedHours: { start: "09:00", end: "09:10" },
-        scheduleDays: { Friday: { enabled: true } },
+        startAt: "2026-11-13T09:00",
+        endAt: "2026-11-13T09:10",
         pageSettings: { [page.id]: { intervalMinutes: 5, dailyPostLimit: 3 } }
     }, [page]);
 
@@ -300,8 +313,8 @@ test("keeps article URLs out of post copy when captions are missing or awaiting 
         enabled: true,
         automaticApproval: false,
         timezone: "Asia/Kolkata",
-        allowedHours: { start: "09:00", end: "21:00" },
-        scheduleDays: { Friday: { enabled: true, times: ["09:00"] } },
+        startAt: "2026-11-13T09:00",
+        endAt: "2026-11-14T09:00",
         pageSettings: { "page-a": { intervalMinutes: 15, dailyPostLimit: 4 } }
     }, [pages[0]]);
 
@@ -327,12 +340,12 @@ test("keeps article URLs out of post copy when captions are missing or awaiting 
     assert.ok(linkOnly.posts.every(post => !post.libraryImageId && !post.content.includes("https://")));
 });
 
-test("enforces Page intervals across adjacent campaign days during DST", () => {
+test("spreads posts over a campaign date-time range across DST", () => {
     const page = pages[0];
     const campaign = {
         campaignName: "Rajasthan Events",
         startDate: "2026-03-07",
-        endDate: "2026-03-08",
+        endDate: "2026-03-09",
         pages: [page],
         articleUrls: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
         imageIds: ["image-a", "image-b"],
@@ -360,18 +373,95 @@ test("enforces Page intervals across adjacent campaign days during DST", () => {
         enabled: true,
         automaticApproval: false,
         timezone: "America/New_York",
-        allowedHours: { start: "09:00", end: "21:00" },
-        weekendPublishing: true,
-        scheduleDays: {
-            Saturday: { enabled: true },
-            Sunday: { enabled: true }
-        },
+        startAt: "2026-03-07T09:00",
+        endAt: "2026-03-09T09:00",
         pageSettings: { [page.id]: { intervalMinutes: 1440, dailyPostLimit: 1 } }
     }, [page]);
 
-    assert.throws(() => generateAutomaticSchedule({
+    const schedule = generateAutomaticSchedule({
         campaign,
         settings,
         now: Date.parse("2026-03-06T00:00:00.000Z")
-    }), /only 1 future time slot/);
+    });
+    assert.equal(schedule.posts.length, 2);
+    assert.equal(schedule.posts[0].scheduledAt, "2026-03-07T14:00:00.000Z");
+    assert.equal(schedule.posts[1].scheduledAt, "2026-03-09T13:00:00.000Z");
+});
+
+test("appends common campaign hashtags to every post exactly once", () => {
+    const campaign = {
+        campaignName: "Hashtag campaign",
+        pages: [pages[0]],
+        articleUrls: [{ url: "https://example.com/one" }],
+        imageIds: [],
+        commonHashtags: ["#PageCrew", "#Events"],
+        resourceAssignments: [{
+            roundIndex: 0,
+            assignments: [{
+                pageId: pages[0].id,
+                pageName: pages[0].name,
+                articleUrl: "https://example.com/one",
+                imageId: "",
+                roundIndex: 0
+            }]
+        }],
+        aiContent: [{
+            id: "content-a",
+            pageId: pages[0].id,
+            roundIndex: 0,
+            caption: "Read this article. #PageCrewful",
+            hashtags: ["#PageCrew", "#AI"],
+            articleUrl: "https://example.com/one",
+            imageId: "",
+            status: "approved"
+        }]
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-16T09:00",
+        repeatResources: false,
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } }
+    }, [pages[0]]);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    });
+
+    assert.equal(schedule.posts.length, 1);
+    assert.equal(schedule.posts[0].content, "Read this article. #PageCrewful\n\n#PageCrew #AI #Events");
+    assert.deepEqual(schedule.posts[0].hashtags, ["#PageCrew", "#AI", "#Events"]);
+});
+
+test("includes Saturday and Sunday in the evenly distributed campaign schedule", () => {
+    const campaign = {
+        campaignName: "Weekend campaign",
+        pages: [pages[0]],
+        articleUrls: [{ url: "https://example.com/weekend", title: "Weekend story" }],
+        imageIds: [],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-14T09:00",
+        endAt: "2026-11-16T09:00",
+        repeatResources: true,
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } }
+    }, [pages[0]]);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-13T00:00:00.000Z")
+    });
+
+    assert.equal(settings.scheduleDays.Saturday.enabled, true);
+    assert.equal(settings.scheduleDays.Sunday.enabled, true);
+    assert.deepEqual(schedule.posts.map(post => post.scheduledAt.slice(0, 10)), [
+        "2026-11-14",
+        "2026-11-15",
+        "2026-11-16"
+    ]);
 });
