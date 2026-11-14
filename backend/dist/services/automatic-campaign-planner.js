@@ -190,18 +190,34 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
 
     const campaignPages = Array.isArray(campaign.pages) ? campaign.pages : [];
     if (!campaignPages.length) throw new Error("Select at least one authorized Facebook Page.");
+    const descriptionMode = campaign.descriptionModeEnabled === true;
+    const manualPostDescription = String(campaign.manualPostDescription || "").trim();
+    if (descriptionMode && !manualPostDescription) {
+        throw new Error("Enter the description that should repeat in every scheduled post.");
+    }
     const pageIds = new Set(campaignPages.map(page => String(page.id)));
     const articleUrls = new Set((campaign.articleUrls || []).map(article => String(article.url)));
     const imageIds = new Set((campaign.imageIds || []).map(String));
     const contentByPage = new Map(campaignPages.map(page => [String(page.id), []]));
     const assignments = new Map();
-    const resourceRounds = campaign.resourceAssignments?.length
-        ? campaign.resourceAssignments
-        : buildResourcePlan({
-            pages: campaignPages,
-            articles: campaign.articleUrls || [],
-            images: []
-        }).rounds;
+    const resourceRounds = descriptionMode
+        ? [{
+            roundIndex: 0,
+            assignments: campaignPages.map((page, index) => ({
+                pageId: String(page.id),
+                pageName: String(page.name || ""),
+                articleUrl: String(campaign.descriptionLink || ""),
+                imageId: campaign.imageIds?.[index % Math.max(campaign.imageIds.length, 1)] || "",
+                roundIndex: 0
+            }))
+        }]
+        : campaign.resourceAssignments?.length
+            ? campaign.resourceAssignments
+            : buildResourcePlan({
+                pages: campaignPages,
+                articles: campaign.articleUrls || [],
+                images: []
+            }).rounds;
     for (const round of resourceRounds) {
         const assignedPages = new Set();
         const assignedUrls = new Set();
@@ -217,7 +233,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             if (assignment.imageId && (campaign.imageIds || []).length >= campaignPages.length && assignedImages.has(assignment.imageId)) {
                 throw new Error("Each Page must receive a unique image within a matching round when enough images are selected.");
             }
-            if (!articleUrls.has(String(assignment.articleUrl)) ||
+            if ((!descriptionMode && !articleUrls.has(String(assignment.articleUrl))) ||
                 (assignment.imageId && !imageIds.has(String(assignment.imageId)))) {
                 throw new Error("The matching plan references a URL or image that is no longer selected.");
             }
@@ -244,15 +260,27 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             throw new Error("The matching plan references a Page that is no longer selected.");
         }
         const article = (campaign.articleUrls || []).find(item => String(item.url) === String(assignment.articleUrl));
-        if (!article) throw new Error("The matching plan references an article URL that is no longer selected.");
+        if (!descriptionMode && !article) throw new Error("The matching plan references an article URL that is no longer selected.");
         const candidate = generatedByRoundAndPage.get(key);
         const useAiCaption = candidate && String(candidate.caption || "").trim() &&
             String(candidate.articleUrl || "") === String(assignment.articleUrl || "") &&
             String(candidate.imageId || "") === String(assignment.imageId || "") &&
             (settings.automaticApproval || candidate.status === "approved");
-        const content = useAiCaption
-            ? candidate
-            : {
+        const content = descriptionMode
+            ? {
+                id: randomUUID(),
+                pageId: assignment.pageId,
+                pageName: assignment.pageName,
+                caption: manualPostDescription,
+                cta: "",
+                hashtags: [],
+                articleUrl: assignment.articleUrl || "",
+                imageId: assignment.imageId || "",
+                status: "approved"
+            }
+            : useAiCaption
+                ? candidate
+                : {
                 id: randomUUID(),
                 pageId: assignment.pageId,
                 pageName: assignment.pageName,
@@ -268,7 +296,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
         }
         contentByPage.get(String(assignment.pageId)).push({ ...content, assignment });
     }
-    if (!assignments.size) throw new Error("Add at least one article URL before activation.");
+    if (!assignments.size && !descriptionMode) throw new Error("Add at least one article URL before activation.");
 
     const pages = [];
     const posts = [];
@@ -314,11 +342,12 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             }
             return true;
         };
-        let slotCount = settings.repeatResources ? maxSlots : pagePosts.length;
-        if (!settings.repeatResources && slotCount > maxSlots) {
+        const shouldRepeatPosts = settings.repeatResources || descriptionMode;
+        let slotCount = shouldRepeatPosts ? maxSlots : pagePosts.length;
+        if (!shouldRepeatPosts && slotCount > maxSlots) {
             throw new Error(`${page.name || "A selected Page"} has ${pagePosts.length} post(s), but the selected date-time range and Page limits allow only ${maxSlots}.`);
         }
-        if (settings.repeatResources) {
+        if (shouldRepeatPosts) {
             let low = 1;
             let high = maxSlots;
             while (low < high) {
@@ -342,21 +371,18 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             postingTimes: []
         });
 
-        const postCount = settings.repeatResources ? slots.length : pagePosts.length;
+        const postCount = shouldRepeatPosts ? slots.length : pagePosts.length;
         for (let index = 0; index < postCount; index += 1) {
-            const slotIndex = settings.repeatResources
+            const slotIndex = shouldRepeatPosts
                 ? index
                 : Math.floor(index * slots.length / pagePosts.length);
             const slot = slots[slotIndex];
             const postContent = pagePosts[index % pagePosts.length];
             const originalArticleUrl = postContent.assignment.articleUrl;
             const articleUrl = postContent.assignment.previewUrl || originalArticleUrl;
-            const utmUrl = schedulerCore.makeTrackingUrl(
-                articleUrl,
-                campaign.campaignName,
-                pageId,
-                postContent.id
-            );
+            const utmUrl = articleUrl
+                ? schedulerCore.makeTrackingUrl(articleUrl, campaign.campaignName, pageId, postContent.id)
+                : "";
             const hashtags = [...new Set([
                 ...(Array.isArray(postContent.hashtags) ? postContent.hashtags : []),
                 ...(Array.isArray(campaign.commonHashtags) ? campaign.commonHashtags : [])
@@ -377,7 +403,9 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 libraryImageId: postContent.assignment.previewUrl ? "" : postContent.imageId,
                 imageId: "",
                 postType: campaign.campaignType || "Campaign",
-                purpose: "Website traffic",
+                purpose: descriptionMode
+                    ? articleUrl ? "Website traffic" : "Description publishing"
+                    : "Website traffic",
                 scheduledAt: slot.scheduledAt.toISOString(),
                 timezone: pageTimezone,
                 status: "scheduled",

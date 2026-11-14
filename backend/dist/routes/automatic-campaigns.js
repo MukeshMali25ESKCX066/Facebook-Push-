@@ -155,13 +155,59 @@ function validateCommonHashtags(value) {
     return normalized;
 }
 
+function validateManualDescription(campaign) {
+    const manualPostDescription = String(campaign.manualPostDescription || "").trim();
+    if (!manualPostDescription) throw new Error("Enter the description that should repeat in every scheduled post.");
+    if (manualPostDescription.length > 5000) throw new Error("The repeating description must be 5,000 characters or fewer.");
+
+    const embeddedLinks = [...manualPostDescription.matchAll(/https?:\/\/[^\s<>"')\]]+/gi)]
+        .map(([url]) => url.replace(/[.,;:!?]+$/, ""));
+    if (embeddedLinks.length > 1) throw new Error("Use one link at most in the repeating description.");
+
+    const explicitLink = String(campaign.descriptionLink || "").trim();
+    const embeddedLink = embeddedLinks[0] || "";
+    const validatedExplicitLink = explicitLink ? validateArticleUrls([{ url: explicitLink }])[0].url : "";
+    const validatedEmbeddedLink = embeddedLink ? validateArticleUrls([{ url: embeddedLink }])[0].url : "";
+    if (validatedExplicitLink && validatedEmbeddedLink && validatedExplicitLink !== validatedEmbeddedLink) {
+        throw new Error("Use the same link in the description and optional link field, or remove one of them.");
+    }
+
+    return {
+        manualPostDescription,
+        descriptionLink: validatedExplicitLink || validatedEmbeddedLink
+    };
+}
+
 function getScheduleCampaign(campaign, workspaceScopeId) {
-    const articles = validateArticleUrls(campaign.articleUrls || []);
     const availableImages = (campaign.imageIds || [])
         .map(id => mediaLibrary.findImage(workspaceScopeId, id))
         .filter(image => image && existsSync(mediaLibrary.getImageFilePath(image)));
     const availableImageIds = new Set(availableImages.map(image => String(image.id)));
     const selectedPages = campaign.pages || [];
+    if (campaign.descriptionModeEnabled === true) {
+        const description = validateManualDescription(campaign);
+        const articles = description.descriptionLink
+            ? validateArticleUrls([{ url: description.descriptionLink }])
+            : [];
+        return {
+            ...campaign,
+            ...description,
+            articleUrls: articles,
+            imageIds: availableImages.map(image => image.id),
+            resourceAssignments: [{
+                roundIndex: 0,
+                assignments: selectedPages.map((page, index) => ({
+                    pageId: String(page.id),
+                    pageName: String(page.name || ""),
+                    articleUrl: description.descriptionLink,
+                    imageId: availableImages[index % Math.max(availableImages.length, 1)]?.id || "",
+                    roundIndex: 0
+                }))
+            }],
+            matchingHistory: campaign.matchingHistory || []
+        };
+    }
+    const articles = validateArticleUrls(campaign.articleUrls || []);
     const currentPlanValid = (campaign.resourceAssignments || []).length > 0 &&
         campaign.resourceAssignments.every(round =>
             (round.assignments || []).length === selectedPages.length &&
@@ -208,16 +254,28 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
                 : "Select at least one authorized Facebook Page."
     );
 
+    const descriptionMode = campaign.descriptionModeEnabled === true;
     let articlesReady = false;
+    let descriptionReady = false;
+    let descriptionSettings = null;
     let articlesMessage = "Add at least one valid public article URL.";
+    let descriptionMessage = "Enter the description that should repeat in every scheduled post.";
     try {
-        const articles = validateArticleUrls(campaign.articleUrls || []);
-        articlesReady = articles.length > 0;
-        if (articlesReady) articlesMessage = `${articles.length} valid article URL(s) are ready.`;
+        if (descriptionMode) {
+            descriptionSettings = validateManualDescription(campaign);
+            descriptionReady = true;
+            descriptionMessage = "The saved description will repeat for every scheduled post.";
+        } else {
+            const articles = validateArticleUrls(campaign.articleUrls || []);
+            articlesReady = articles.length > 0;
+            if (articlesReady) articlesMessage = `${articles.length} valid article URL(s) are ready.`;
+        }
     } catch (error) {
-        articlesMessage = error.message;
+        if (descriptionMode) descriptionMessage = error.message;
+        else articlesMessage = error.message;
     }
-    check("Article URLs", articlesReady, articlesMessage);
+    if (descriptionMode) check("Repeating description", descriptionReady, descriptionMessage);
+    else check("Article URLs", articlesReady, articlesMessage);
 
     const selectedImageCount = (campaign.imageIds || []).length;
     const availableImageCount = (campaign.imageIds || []).filter(id => {
@@ -228,20 +286,29 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
         ? `${availableImageCount} optional image(s) are available.`
         : selectedImageCount
             ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
-            : "No images selected; posts will link directly to the article.");
+            : descriptionMode
+                ? descriptionSettings?.descriptionLink
+                    ? "No images selected; Facebook can show a preview for the optional description link."
+                    : "No images selected; the repeating description will publish as a text post."
+                : "No images selected; posts will link directly to the article.");
     const previewConfigurationReady = !campaign.sharedPreviewEnabled || sharedPreviewStore.isConfigured();
     const sharedPreviewReady = !campaign.sharedPreviewEnabled ||
-        (availableImageCount > 0 && previewConfigurationReady);
+        (availableImageCount > 0 && previewConfigurationReady &&
+            (!descriptionMode || Boolean(descriptionSettings?.descriptionLink)));
     check("Clickable custom-image previews", sharedPreviewReady,
         !campaign.sharedPreviewEnabled
             ? "Off. Selected images use the existing publishing behavior."
             : !availableImageCount
                 ? "Select at least one available image to use custom-image preview links."
+                : descriptionMode && !descriptionSettings?.descriptionLink
+                    ? "Add one public link to the description or turn off custom-image previews."
                 : previewConfigurationReady
                     ? "On. Selected images will appear in preview links and visitors will be redirected to the article."
                     : "Configure PostgreSQL, Cloudflare R2, and the HTTPS preview and media domains on the backend.");
 
-    check("AI captions", true, "Optional. Article links can publish without AI-generated captions.");
+    check("AI captions", true, descriptionMode
+        ? "Optional. The repeating description is used instead of generated captions."
+        : "Optional. Article links can publish without AI-generated captions.");
 
     let publishingSettings;
     let publishingSettingsError = "";
@@ -261,10 +328,14 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
         ? `${campaign.startDate} through ${campaign.endDate}.`
         : "Save valid Start and End Date-Time values in required schedule settings.");
 
-    const contentReady = articlesReady;
-    check("Article link publishing", contentReady, contentReady
-        ? "Captions, images, and resource matching are optional; article links can publish directly."
-        : "Add at least one valid public article URL to publish.");
+    const contentReady = descriptionMode ? descriptionReady : articlesReady;
+    check(descriptionMode ? "Description publishing" : "Article link publishing", contentReady, contentReady
+        ? descriptionMode
+            ? "The repeating description will publish directly; a link is optional."
+            : "Captions, images, and resource matching are optional; article links can publish directly."
+        : descriptionMode
+            ? descriptionMessage
+            : "Add at least one valid public article URL to publish.");
 
     let schedulePreview = null;
     let scheduleError = "";
@@ -284,7 +355,7 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
             scheduleError = error.message;
         }
     } else {
-        scheduleError = "Connect a Facebook Page, add a valid link, and set a valid campaign date range.";
+        scheduleError = "Connect an authorized Facebook Page, provide valid campaign content, and save the required schedule.";
     }
     check("Future publishing slots", Boolean(schedulePreview), scheduleError ||
         `${schedulePreview?.postCount || 0} post(s) fit the selected dates and Page limits.`);
@@ -606,6 +677,9 @@ router.post("/", (req, res) => {
         articleUrls: [],
         imageIds: [],
         sharedPreviewEnabled: false,
+        descriptionModeEnabled: false,
+        manualPostDescription: "",
+        descriptionLink: "",
         imageUsageHistory: [],
         matchingHistory: [],
         resourceAssignments: [],
@@ -635,7 +709,7 @@ router.patch("/:id", (req, res) => {
         return;
     }
     if (["active", "paused", "scheduled"].includes(campaign.status) &&
-        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled"]
+        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled", "descriptionModeEnabled", "manualPostDescription", "descriptionLink"]
             .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
         return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
@@ -643,6 +717,7 @@ router.patch("/:id", (req, res) => {
     const updates = {};
     let nextStep = Number(campaign.currentStep || 3);
     let invalidatesPlan = false;
+    let descriptionModeChanged = false;
     try {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "pages")) {
             updates.pages = validateSelectedPages(req.body.pages, req.workspaceScopeId);
@@ -655,6 +730,35 @@ router.patch("/:id", (req, res) => {
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "commonHashtags")) {
             updates.commonHashtags = validateCommonHashtags(req.body.commonHashtags);
         }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "descriptionModeEnabled")) {
+            if (typeof req.body.descriptionModeEnabled !== "boolean") {
+                throw new Error("Description publishing must be switched on or off.");
+            }
+            updates.descriptionModeEnabled = req.body.descriptionModeEnabled;
+            descriptionModeChanged = updates.descriptionModeEnabled !== campaign.descriptionModeEnabled;
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "manualPostDescription")) {
+            if (typeof req.body.manualPostDescription !== "string") {
+                throw new Error("Enter the repeating description as text.");
+            }
+            updates.manualPostDescription = req.body.manualPostDescription.trim();
+            if (updates.manualPostDescription.length > 5000) {
+                throw new Error("The repeating description must be 5,000 characters or fewer.");
+            }
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "descriptionLink")) {
+            if (typeof req.body.descriptionLink !== "string") {
+                throw new Error("The optional description link must be text.");
+            }
+            const descriptionLink = req.body.descriptionLink.trim();
+            updates.descriptionLink = descriptionLink
+                ? validateArticleUrls([{ url: descriptionLink }])[0].url
+                : "";
+        }
+        if (updates.descriptionModeEnabled ?? campaign.descriptionModeEnabled) {
+            Object.assign(updates, validateManualDescription({ ...campaign, ...updates }));
+        }
+        if (descriptionModeChanged) nextStep = 4;
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "imageIds")) {
             updates.imageIds = mediaLibrary.validateImageIds(req.workspaceScopeId, req.body.imageIds);
             updates.imageUsageHistory = buildImageUsageHistory(campaign, updates.imageIds);

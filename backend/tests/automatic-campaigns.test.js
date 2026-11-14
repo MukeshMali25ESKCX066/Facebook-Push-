@@ -463,6 +463,82 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         assert.ok(linkOnlyResult.schedule.posts[0].utmUrl.includes("utm_source=facebook"));
         assert.equal(linkOnlyResult.campaign.publishingSettings.enabled, true);
         assert.equal(generationCall, aiCallsBeforeLinkOnlyActivation);
+
+        const descriptionOnlyCreated = await fetch(`${baseUrl}/api/automatic-campaigns`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ campaignName: "Description-only campaign" })
+        });
+        assert.equal(descriptionOnlyCreated.status, 201);
+        const descriptionOnlyCampaign = await descriptionOnlyCreated.json();
+        const descriptionOnlySaved = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+                pages: [{ id: "page-b" }],
+                descriptionModeEnabled: true,
+                manualPostDescription: "Join our event this weekend.",
+                descriptionLink: "",
+                currentStep: 4
+            })
+        });
+        assert.equal(descriptionOnlySaved.status, 200);
+        const linkedDescription = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ descriptionLink: "https://example.com/event" })
+        });
+        assert.equal(linkedDescription.status, 200);
+        assert.equal((await linkedDescription.json()).descriptionLink, "https://example.com/event");
+        const textOnlyDescription = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ descriptionLink: "" })
+        });
+        assert.equal(textOnlyDescription.status, 200);
+        assert.equal((await textOnlyDescription.json()).descriptionLink, "");
+
+        const descriptionOnlyStartAt = dateTimeAfterDays(3, "09:00");
+        const descriptionOnlyEndAt = dateTimeAfterDays(6, "09:00");
+        const descriptionOnlySettings = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+                publishingSettings: {
+                    enabled: true,
+                    timezone: "Asia/Kolkata",
+                    startAt: descriptionOnlyStartAt,
+                    endAt: descriptionOnlyEndAt,
+                    repeatResources: false,
+                    pageSettings: { "page-b": { intervalMinutes: 60, dailyPostLimit: 1 } }
+                },
+                currentStep: 8
+            })
+        });
+        assert.equal(descriptionOnlySettings.status, 200);
+
+        const descriptionReadinessResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}/readiness`, { headers });
+        assert.equal(descriptionReadinessResponse.status, 200);
+        const descriptionReadiness = await descriptionReadinessResponse.json();
+        assert.equal(descriptionReadiness.ready, true, JSON.stringify(descriptionReadiness.checks));
+        assert.equal(descriptionReadiness.checks.find(item => item.name === "Description publishing").ready, true);
+        assert.equal(descriptionReadiness.checks.some(item => item.name === "Article URLs"), false);
+        assert.equal(descriptionReadiness.schedulePreview.postCount, 4);
+
+        const descriptionOnlyActivated = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}/activate`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({})
+        });
+        assert.equal(descriptionOnlyActivated.status, 200);
+        const descriptionActivation = await descriptionOnlyActivated.json();
+        assert.equal(descriptionActivation.campaign.status, "scheduled");
+        assert.equal(descriptionActivation.schedule.posts.length, 4);
+        assert.ok(descriptionActivation.schedule.posts.every(post =>
+            post.content === "Join our event this weekend." &&
+            post.articleUrl === "" &&
+            post.utmUrl === ""
+        ));
     } finally {
         aiContent.generateContent = originalGenerateContent;
     }

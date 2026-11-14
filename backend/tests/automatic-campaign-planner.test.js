@@ -465,3 +465,51 @@ test("includes Saturday and Sunday in the evenly distributed campaign schedule",
         "2026-11-16"
     ]);
 });
+
+test("repeats a manual description across the required schedule without URL resources", () => {
+    const campaign = {
+        campaignName: "Manual description campaign",
+        descriptionModeEnabled: true,
+        manualPostDescription: "Join our event this weekend.",
+        descriptionLink: "",
+        commonHashtags: ["#PageCrew"],
+        pages: [pages[0]],
+        articleUrls: [],
+        imageIds: [],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-17T09:00",
+        repeatResources: false,
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } }
+    }, [pages[0]]);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    });
+
+    assert.equal(schedule.posts.length, 3);
+    assert.ok(schedule.posts.every(post =>
+        post.caption === campaign.manualPostDescription &&
+        post.content === "Join our event this weekend.\n\n#PageCrew" &&
+        post.articleUrl === "" &&
+        post.utmUrl === ""
+    ));
+
+    campaign.descriptionLink = "https://example.com/event";
+    const linkedSchedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    });
+    assert.equal(linkedSchedule.posts.length, 3);
+    assert.ok(linkedSchedule.posts.every(post =>
+        post.caption === campaign.manualPostDescription &&
+        post.articleUrl === campaign.descriptionLink &&
+        post.utmUrl.includes("utm_source=facebook")
+    ));
+});

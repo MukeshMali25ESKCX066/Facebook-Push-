@@ -23,6 +23,7 @@
     discoverySearch: "",
     discoveryWarnings: [],
     discoveryTruncated: false,
+    descriptionSettingsDraft: null,
     aiSettingsDraft: null,
     publishingSettingsDraft: null,
     isGeneratingCaptions: false,
@@ -77,6 +78,7 @@
       "create-campaign": "Step 2 · Create Campaign",
       "facebook-pages": "Step 3 · Select Facebook Pages",
       "url-library": "Step 4 · Add Article URLs",
+      "post-description": "Step 4 · Description Publishing",
       "image-library": "Step 5 · Optional Images",
       "smart-matching": "Step 6 · Optional Resource Preview",
       "ai-settings": "Step 7 · AI Captions",
@@ -343,6 +345,7 @@
       </label>`).join("");
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      ${campaign.descriptionModeEnabled ? `<div class="ah-inline-note">Description publishing is on. The URL Library is optional; posts will use your saved description and campaign schedule.</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 4 · Add Article URLs</p><h2>Build your article list</h2><p>Paste one or many URLs, upload a CSV/XLSX sheet, or scan a public website homepage.</p></div></div>
         <section class="ah-import-card">
@@ -385,6 +388,116 @@
         });
       });
     }
+  }
+
+  function descriptionLinkForPreview(description, explicitLink) {
+    let value = String(explicitLink || "").trim();
+    if (!value) {
+      value = (String(description || "").match(/https?:\/\/[^\s<>"')\]]+/i) || [""])[0]
+        .replace(/[.,;:!?]+$/, "");
+    }
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.toString() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function renderManualPostPreviews(campaign, description, explicitLink) {
+    const link = descriptionLinkForPreview(description, explicitLink);
+    const captionText = String(description || "")
+      .replace(/https?:\/\/[^\s<>"')\]]+/gi, "")
+      .trim();
+    const caption = buildPreviewCaption({ caption: captionText, hashtags: [] }, campaign.commonHashtags);
+    const image = state.imageAssets.find(item => item.id === campaign.imageIds?.[0]);
+    const destination = link
+      ? `<a class="ah-social-destination" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(new URL(link).hostname)}</a>`
+      : "";
+    const card = (device, label) => `
+      <article class="ah-description-preview-card">
+        <h3>${label} preview</h3>
+        <div class="ah-preview-stage">
+          <div class="ah-device-frame ah-device-${device}">
+            <article class="ah-social-preview">
+              <header><span class="ah-social-avatar">f</span><div><strong>Selected Facebook Page</strong><small>PageCrew preview</small></div></header>
+              <p class="ah-social-caption">${escapeHtml(caption || "Your repeating description will appear here.")}</p>
+              ${image ? `<img class="ah-social-image" src="${escapeHtml(image.url)}" alt="${escapeHtml(image.originalName || "Campaign image")}">` : ""}
+              <footer><span>Like</span><span>Comment</span><span>Share</span></footer>
+              ${destination}
+            </article>
+          </div>
+        </div>
+      </article>`;
+    return `<div class="ah-description-preview-grid">${card("mobile", "Mobile")}${card("laptop", "Desktop")}</div>`;
+  }
+
+  function collectDescriptionSettings(form) {
+    const campaign = getActiveCampaign();
+    return {
+      descriptionModeEnabled: form.querySelector("#ah-description-mode-toggle").checked,
+      manualPostDescription: form.querySelector("#ah-manual-post-description")?.value ?? campaign.manualPostDescription ?? "",
+      descriptionLink: form.querySelector("#ah-description-link")?.value.trim() ?? campaign.descriptionLink ?? ""
+    };
+  }
+
+  function updateManualPostPreviews(form) {
+    const settings = collectDescriptionSettings(form);
+    state.descriptionSettingsDraft = settings;
+    const previews = root.querySelector("#ah-description-previews");
+    if (previews) previews.innerHTML = renderManualPostPreviews(
+      getActiveCampaign(),
+      settings.manualPostDescription,
+      settings.descriptionLink
+    );
+  }
+
+  function renderDescriptionSettings() {
+    const campaign = getActiveCampaign();
+    if (!campaign) {
+      renderCampaignChooser("post-description");
+      return;
+    }
+    const settings = state.descriptionSettingsDraft || {
+      descriptionModeEnabled: campaign.descriptionModeEnabled === true,
+      manualPostDescription: campaign.manualPostDescription || "",
+      descriptionLink: campaign.descriptionLink || ""
+    };
+    const enabled = settings.descriptionModeEnabled === true;
+    root.innerHTML = `
+      ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+      <section class="ah-panel ah-workflow-panel">
+        <div class="ah-panel-heading"><div><p class="ah-kicker">Step 4 · Description Publishing</p><h2>Repeat your own description</h2><p>Turn this on to publish the same description in every post. The existing campaign schedule remains in effect.</p></div></div>
+        <form id="ah-description-settings-form">
+          <section class="ah-preview-mode">
+            <label class="ah-preview-switch" for="ah-description-mode-toggle">
+              <input id="ah-description-mode-toggle" type="checkbox" ${enabled ? "checked" : ""}>
+              <span class="ah-preview-switch-track" aria-hidden="true"></span>
+              <strong>Publish from my description (URL Library optional)</strong>
+            </label>
+            <p>When on, the campaign uses your text for every scheduled post. Article URLs and AI captions are not required. You can add one optional link for Facebook and mobile/desktop previews.</p>
+          </section>
+          ${enabled ? `
+            <label class="ah-field">Description to repeat in every post
+              <textarea id="ah-manual-post-description" rows="6" maxlength="5000" placeholder="Write the exact post description you want repeated." required>${escapeHtml(settings.manualPostDescription)}</textarea>
+            </label>
+            <label class="ah-field">Optional link
+              <input id="ah-description-link" type="url" maxlength="2000" value="${escapeHtml(settings.descriptionLink)}" placeholder="https://yourwebsite.com/article">
+            </label>
+            <p class="ah-help-text">A single https:// or http:// link may also be included in the description. If provided, it will appear as the Facebook link destination and in both previews.</p>
+            <div id="ah-description-previews">${renderManualPostPreviews(campaign, settings.manualPostDescription, settings.descriptionLink)}</div>
+          ` : `<div class="ah-inline-warning">Turn on description publishing to skip the URL Library and enter the text for your posts.</div>`}
+          <div class="ah-form-footer">
+            <span>${enabled ? "The description repeats at each slot in your saved campaign schedule." : "URL-based publishing is unchanged while this toggle is off."}</span>
+            <div class="ah-form-actions">
+              <button type="submit" class="ah-button">Save Description Settings</button>
+              ${enabled
+                ? `<button type="button" class="ah-button ah-button-secondary" data-ah-action="save-description-and-schedule">Save &amp; Set Schedule →</button>`
+                : `<button type="button" class="ah-button ah-button-secondary" data-ah-action="url-library">Open URL Library</button>`}
+            </div>
+          </div>
+        </form>
+      </section>`;
   }
 
   function formatFileSize(value) {
@@ -631,6 +744,16 @@
     const campaign = getActiveCampaign();
     if (!campaign) {
       renderCampaignChooser("post-preview");
+      return;
+    }
+    if (campaign.descriptionModeEnabled) {
+      root.innerHTML = `
+        ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
+        <section class="ah-panel ah-workflow-panel">
+          <div class="ah-panel-heading"><div><p class="ah-kicker">Campaign description</p><h2>Mobile and desktop preview</h2><p>The saved description and optional link used by the campaign schedule.</p></div></div>
+          ${renderManualPostPreviews(campaign, campaign.manualPostDescription, campaign.descriptionLink)}
+          <button type="button" class="ah-button ah-button-secondary" data-ah-action="post-description">Edit Description</button>
+        </section>`;
       return;
     }
     const posts = campaign.aiContent || [];
@@ -1227,6 +1350,45 @@
     if (state.currentView === "url-library" && state.activeCampaignId === campaign.id) renderUrlLibrary();
   }
 
+  async function saveDescriptionSettings(continueToSchedule = false) {
+    const campaign = getActiveCampaign();
+    const form = root.querySelector("#ah-description-settings-form");
+    if (!form) return;
+    const descriptionSettings = collectDescriptionSettings(form);
+    if (descriptionSettings.descriptionModeEnabled && !descriptionSettings.manualPostDescription.trim()) {
+      state.descriptionSettingsDraft = descriptionSettings;
+      state.workflowMessage = "Enter the description that should repeat in every scheduled post.";
+      renderDescriptionSettings();
+      return;
+    }
+
+    const button = form.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    try {
+      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ ...descriptionSettings, currentStep: 4 })
+      });
+      Object.assign(campaign, updated);
+      state.descriptionSettingsDraft = {
+        descriptionModeEnabled: updated.descriptionModeEnabled === true,
+        manualPostDescription: updated.manualPostDescription || "",
+        descriptionLink: updated.descriptionLink || ""
+      };
+      state.workflowMessage = updated.descriptionModeEnabled
+        ? "Repeating description saved. Configure or keep the campaign schedule, then review it."
+        : "Description publishing is off. URL-based publishing is unchanged.";
+      if (continueToSchedule && updated.descriptionModeEnabled) {
+        showView("publishing-settings", "Description saved. Set the dates and times for these repeated posts.");
+        return;
+      }
+    } catch (error) {
+      state.descriptionSettingsDraft = descriptionSettings;
+      state.workflowMessage = error.message;
+    }
+    if (state.currentView === "post-description" && state.activeCampaignId === campaign.id) renderDescriptionSettings();
+  }
+
   async function importArticleFile(file) {
     const campaign = getActiveCampaign();
     const formData = new FormData();
@@ -1715,6 +1877,7 @@
     else if (view === "campaign-manager") renderCampaignManager(notice);
     else if (view === "facebook-pages") void loadFacebookPages();
     else if (view === "url-library") renderUrlLibrary();
+    else if (view === "post-description") renderDescriptionSettings();
     else if (view === "image-library") void loadImageLibrary();
     else if (view === "smart-matching") {
       renderSmartMatching();
@@ -1741,6 +1904,7 @@
 
   function getResumeView(campaign) {
     if (campaign.currentStep >= 8) return "publishing-settings";
+    if (campaign.descriptionModeEnabled) return "post-description";
     if (campaign.currentStep >= 7) return "ai-settings";
     if (campaign.currentStep >= 6) return "smart-matching";
     if (campaign.currentStep >= 5) return "image-library";
@@ -1779,6 +1943,7 @@
       state.imageFolder = "";
       state.imageSearch = "";
       state.discoverySearch = "";
+      state.descriptionSettingsDraft = null;
       state.aiSettingsDraft = null;
       state.publishingSettingsDraft = null;
       state.workflowMessage = "Campaign saved as a draft. Select the Pages that are authorized to publish.";
@@ -1803,6 +1968,8 @@
     if (action === "create") showView("create-campaign");
     else if (action === "campaign-manager") showView("campaign-manager");
     else if (action === "overview") showView("overview");
+    else if (action === "url-library") showView("url-library");
+    else if (action === "post-description") showView("post-description");
     else if (action === "continue-campaign" || action === "choose-campaign") {
       state.activeCampaignId = control.dataset.campaignId;
       const campaign = getActiveCampaign();
@@ -1813,6 +1980,7 @@
       state.discoverySearch = "";
       state.discoveryWarnings = [];
       state.discoveryTruncated = false;
+      state.descriptionSettingsDraft = null;
       state.aiSettingsDraft = null;
       state.publishingSettingsDraft = null;
       state.activationReadiness = null;
@@ -1884,6 +2052,8 @@
       void saveArticleUrls("image-library");
     } else if (action === "save-articles-and-schedule") {
       void saveArticleUrls("publishing-settings");
+    } else if (action === "save-description-and-schedule") {
+      void saveDescriptionSettings(true);
     } else if (action === "save-image-metadata") {
       void saveImageMetadata(control.dataset.imageId);
     } else if (action === "delete-image") {
@@ -1946,7 +2116,10 @@
 
   root.addEventListener("input", event => {
     const target = event.target;
-    if (target.id === "ah-image-search") {
+    if (["ah-manual-post-description", "ah-description-link"].includes(target.id)) {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) updateManualPostPreviews(form);
+    } else if (target.id === "ah-image-search") {
       const term = target.value.trim().toLowerCase();
       state.imageSearch = target.value;
       const prefix = state.imageFolder ? `${state.imageFolder}/` : "";
@@ -1974,6 +2147,12 @@
     } else if (target.id === "ah-preview-post") {
       state.previewContentId = target.value;
       renderPostPreview();
+    } else if (target.id === "ah-description-mode-toggle") {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) {
+        state.descriptionSettingsDraft = collectDescriptionSettings(form);
+        renderDescriptionSettings();
+      }
     } else if (target.id === "ah-url-file" && target.files[0]) {
       void importArticleFile(target.files[0]);
     } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {
@@ -2018,6 +2197,9 @@
     } else if (event.target.id === "ah-publishing-settings-form") {
       event.preventDefault();
       void savePublishingSettings();
+    } else if (event.target.id === "ah-description-settings-form") {
+      event.preventDefault();
+      void saveDescriptionSettings();
     } else {
       return;
     }
@@ -2035,6 +2217,7 @@
     else if (state.currentView === "campaign-manager") renderCampaignManager();
     else if (state.currentView === "facebook-pages") void loadFacebookPages();
     else if (state.currentView === "url-library") renderUrlLibrary();
+    else if (state.currentView === "post-description") renderDescriptionSettings();
     else if (state.currentView === "image-library") void loadImageLibrary();
     else if (state.currentView === "smart-matching" || state.currentView === "ai-settings" || state.currentView === "post-preview") void loadImageLibrary();
     else if (state.currentView === "publishing-settings") renderPublishingSettings();

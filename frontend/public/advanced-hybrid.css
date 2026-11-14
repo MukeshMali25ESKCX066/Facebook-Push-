@@ -61,6 +61,12 @@
 .ah-error { margin:0 0 12px; border:1px solid #fecdca; border-radius:9px; padding:10px 12px; background:#fef3f2; color:#b42318; font-size:11px; }
 .ah-preview-mode { display:grid; gap:7px; border:1px solid #dbe5f4; border-radius:10px; padding:12px; background:#f8faff; }
 .ah-preview-mode p { margin:0; color:var(--ah-muted); font-size:10px; line-height:1.55; }
+.ah-description-preview-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.ah-description-preview-card { display:grid; min-width:0; gap:7px; }
+.ah-description-preview-card h3 { margin:0; color:#344054; font-size:11px; }
+.ah-description-preview-card .ah-preview-stage { min-width:0; padding:10px; }
+.ah-description-preview-card .ah-device-frame { width:100%; }
+.ah-description-preview-card .ah-device-mobile { max-width:390px; }
 .ah-preview-switch { display:flex; align-items:center; gap:10px; color:#344054; cursor:pointer; font-size:11px; }
 .ah-preview-switch input { position:absolute; width:1px; height:1px; opacity:0; }
 .ah-preview-switch input:disabled,.ah-preview-switch input:disabled+.ah-preview-switch-track { cursor:not-allowed; }
@@ -260,6 +266,7 @@
   .ah-stage-badge { display:none; }
   .ah-shell { display:block; padding:13px 12px 25px; }
   .ah-url-hashtag-grid { grid-template-columns:1fr; }
+  .ah-description-preview-grid { grid-template-columns:1fr; }
   .ah-module-sidebar { margin-bottom:12px; padding:9px; }
   .ah-module-title { display:none; }
   .ah-module-nav { display:flex; gap:5px; overflow-x:auto; padding-bottom:2px; }
