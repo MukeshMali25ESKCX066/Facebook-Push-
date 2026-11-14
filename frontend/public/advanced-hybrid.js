@@ -458,14 +458,6 @@
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 5 · Optional images</p><h2>Campaign image library</h2><p>Images are optional. Upload individual images, a folder, or a ZIP if you want image posts instead of link-only posts.</p></div></div>
-        <section class="ah-preview-mode" aria-label="Clickable custom-image previews">
-          <label class="ah-preview-switch">
-            <input id="ah-shared-preview-toggle" type="checkbox" ${campaign.sharedPreviewEnabled === true ? "checked" : ""} ${["active", "paused"].includes(campaign.status) ? "disabled" : ""}>
-            <span class="ah-preview-switch-track" aria-hidden="true"></span>
-            <strong>Use selected image as a clickable article preview</strong>
-          </label>
-          <p>Off keeps normal image publishing unchanged. On uses the selected image on a public preview link, then automatically redirects visitors to the original article. Requires backend PostgreSQL, Cloudflare R2, and configured HTTPS preview/media domains.</p>
-        </section>
         <section class="ah-import-card">
           <div class="ah-media-upload-grid">
             <label class="ah-field">Category for new uploads<input id="ah-image-category" type="text" maxlength="60" placeholder="e.g. Diwali"></label>
@@ -1396,7 +1388,6 @@
           await directActivateCampaign(campaign.id);
           return;
         }
-
         showView(nextView, "Images saved. Resource matching is optional.");
         return;
       }
@@ -1404,28 +1395,6 @@
       state.workflowMessage = error.message;
     }
     if (state.currentView === "image-library") renderImageLibrary();
-  }
-
-  async function saveSharedPreviewToggle(input) {
-    const campaign = getActiveCampaign();
-    const enabled = input.checked;
-    const previous = campaign.sharedPreviewEnabled === true;
-    input.disabled = true;
-    try {
-      const updated = await request(`/api/automatic-campaigns/${encodeURIComponent(campaign.id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ sharedPreviewEnabled: enabled, currentStep: 5 })
-      });
-      Object.assign(campaign, updated);
-      state.activationReadiness = null;
-      state.workflowMessage = enabled
-        ? "Clickable custom-image previews are on for this campaign."
-        : "Clickable custom-image previews are off. Normal image publishing is unchanged.";
-    } catch (error) {
-      input.checked = previous;
-      state.workflowMessage = error.message;
-    }
-    renderImageLibrary();
   }
 
   async function buildMatchingPlan() {
@@ -1907,8 +1876,6 @@
       else state.imageSelection.delete(target.dataset.libraryImageId);
       const count = root.querySelector("#ah-image-selection-count");
       if (count) count.textContent = `${state.imageSelection.size} image${state.imageSelection.size === 1 ? "" : "s"} selected for ${getActiveCampaign().campaignName}`;
-    } else if (target.id === "ah-shared-preview-toggle") {
-      void saveSharedPreviewToggle(target);
     } else if (target.matches("[data-schedule-day]")) {
       const form = root.querySelector("#ah-publishing-settings-form");
       if (form) {

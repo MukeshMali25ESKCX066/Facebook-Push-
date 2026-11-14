@@ -63,7 +63,6 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     assert.equal(created.status, 201);
     const campaign = await created.json();
     assert.equal(campaign.status, "draft");
-    assert.equal(campaign.sharedPreviewEnabled, false);
     assert.equal(campaign.timezone, "Asia/Kolkata");
     assert.deepEqual(campaign.pages, []);
     assert.deepEqual(campaign.articleUrls, []);
@@ -83,8 +82,7 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         body: JSON.stringify({
             pages: [{ id: "page-a", name: "Untrusted page name" }],
             articleUrls: [{ url: "https://example.com/article-one", title: "Article One" }],
-            currentStep: 4,
-            sharedPreviewEnabled: true
+            currentStep: 4
         })
     });
     assert.equal(updated.status, 200);
@@ -93,15 +91,6 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     assert.equal(updatedCampaign.pages[0].authorized, true);
     assert.equal(updatedCampaign.articleUrls[0].status, "Ready");
     assert.equal(updatedCampaign.currentStep, 4);
-    assert.equal(updatedCampaign.sharedPreviewEnabled, true);
-    const disabledPreviews = await fetch(`${baseUrl}/api/automatic-campaigns/${campaign.id}`, {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ sharedPreviewEnabled: false })
-    });
-    assert.equal(disabledPreviews.status, 200);
-    const disabledCampaign = await disabledPreviews.json();
-    assert.equal(disabledCampaign.sharedPreviewEnabled, false);
 
     pages.pageMetadata[pages.pageTokenKey("account:workspace-a", "page-denied")] = {
         id: "page-denied",
@@ -124,7 +113,7 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     const ownCampaigns = await fetch(`${baseUrl}/api/automatic-campaigns`, {
         headers: { "x-test-workspace": "account:workspace-a" }
     });
-    assert.deepEqual(await ownCampaigns.json(), [disabledCampaign]);
+    assert.deepEqual(await ownCampaigns.json(), [updatedCampaign]);
 
     const otherWorkspaceCampaigns = await fetch(`${baseUrl}/api/automatic-campaigns`, {
         headers: { "x-test-workspace": "account:workspace-b" }

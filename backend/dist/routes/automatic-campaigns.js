@@ -16,7 +16,6 @@ const {
     validatePublishingSettings
 } = require("../services/automatic-campaign-planner.js");
 const { parseHttpUrl, isPrivateAddress } = require("../services/public-url.js");
-const sharedPreviewStore = require("../services/shared-preview-store.js");
 const schedulerRoute = require("./scheduler.js");
 
 const router = Router();
@@ -27,7 +26,6 @@ const persistCampaigns = require("../persist.js")("automaticCampaigns", () => ca
     if (Array.isArray(data)) campaigns.splice(0, campaigns.length, ...data);
 });
 const campaignTypes = new Set(["Event", "Article", "Traffic"]);
-const activationLocks = new Set();
 const urlUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 3 * 1024 * 1024, files: 1 }
@@ -232,17 +230,6 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
         : selectedImageCount
             ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
             : "No images selected; posts will link directly to the article.");
-    const previewConfigurationReady = !campaign.sharedPreviewEnabled || sharedPreviewStore.isConfigured();
-    const sharedPreviewReady = !campaign.sharedPreviewEnabled ||
-        (availableImageCount > 0 && previewConfigurationReady);
-    check("Clickable custom-image previews", sharedPreviewReady,
-        !campaign.sharedPreviewEnabled
-            ? "Off. Selected images use the existing publishing behavior."
-            : !availableImageCount
-                ? "Select at least one available image to use custom-image preview links."
-                : previewConfigurationReady
-                    ? "On. Selected images will appear in preview links and visitors will be redirected to the article."
-                    : "Configure PostgreSQL, Cloudflare R2, and the HTTPS preview and media domains on the backend.");
 
     check("AI captions", true, "Optional. Article links can publish without AI-generated captions.");
 
@@ -443,13 +430,6 @@ async function parseExcelUrls(buffer) {
 }
 
 router.use(requireWorkspace);
-router.use((req, res, next) => {
-    const campaignId = req.path.split("/")[1];
-    if (req.method !== "GET" && activationLocks.has(campaignId)) {
-        return res.status(409).json({ error: "Wait for campaign activation to finish before changing this campaign." });
-    }
-    next();
-});
 
 router.get("/", (req, res) => {
     res.json(campaigns.filter(campaign => campaign.workspaceScopeId === req.workspaceScopeId));
@@ -470,97 +450,70 @@ router.get("/:id/readiness", (req, res) => {
     res.json(getActivationReadiness(campaign, req.workspaceScopeId));
 });
 
-router.post("/:id/activate", async (req, res) => {
+router.post("/:id/activate", (req, res) => {
     if (!requireEncryptedPersistence(res)) return;
     const campaign = campaigns.find(item => item.id === req.params.id && item.workspaceScopeId === req.workspaceScopeId);
     if (!campaign) return res.status(404).json({ error: "Campaign not found." });
-    if (activationLocks.has(campaign.id)) return res.status(409).json({ error: "Campaign activation is already in progress." });
-    activationLocks.add(campaign.id);
+    const previous = { ...campaign };
     try {
-        const previous = { ...campaign };
-        try {
-            const scheduleCampaign = getScheduleCampaign(campaign, req.workspaceScopeId);
-            const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
-            const publishingSettings = validatePublishingSettings(
-                usesDefaultPublishingSettings
-                    ? defaultPublishingSettings(campaign, campaign.pages || [])
-                    : campaign.publishingSettings,
-                campaign.pages || [],
-                campaign.timezone
-            );
-            Object.assign(campaign, {
-                imageIds: scheduleCampaign.imageIds,
-                resourceAssignments: scheduleCampaign.resourceAssignments,
-                matchingHistory: scheduleCampaign.matchingHistory,
-                publishingSettings
-            });
-        } catch (error) {
-            return res.status(409).json({ error: error.message || "Campaign resources could not be prepared for activation." });
-        }
-        const readiness = getActivationReadiness(campaign, req.workspaceScopeId);
-        if (!readiness.ready) {
-            Object.assign(campaign, previous);
-            return res.status(409).json({
-                error: "Complete every campaign readiness check before activation.",
-                readiness
-            });
-        }
-
-        if (campaign.sharedPreviewEnabled) {
-            try {
-                const ownerUserId = req.workspaceScopeId.slice(req.workspaceScopeId.lastIndexOf(":") + 1);
-                campaign.resourceAssignments = await sharedPreviewStore.prepareCampaignAssignments({
-                    ownerUserId,
-                    campaignId: campaign.id,
-                    rounds: campaign.resourceAssignments,
-                    workspaceScopeId: req.workspaceScopeId
-                });
-            } catch (error) {
-                Object.assign(campaign, previous);
-                const candidateStatus = Number(error.status);
-                const status = candidateStatus >= 400 && candidateStatus < 500 ? candidateStatus : candidateStatus === 503 ? 503 : 409;
-                return res.status(status).json({
-                    error: status === 409
-                        ? "Custom-image preview links could not be prepared. Verify the selected images and backend configuration."
-                        : error.message
-                });
-            }
-        }
-
-        if (campaign.publishingSettings.automaticApproval && Array.isArray(campaign.aiContent)) {
-            campaign.aiContent = campaign.aiContent.map(content =>
-                content.status === "approved" ? content : { ...content, status: "approved" }
-            );
-        }
-        let schedule;
-        try {
-            schedule = schedulerRoute.createAutomaticCampaignSchedule({
-                campaign,
-                workspaceScopeId: req.workspaceScopeId
-            });
-        } catch (error) {
-            Object.assign(campaign, previous);
-            return res.status(409).json({ error: error.message || "The publishing schedule could not be activated." });
-        }
-
-        const activatedAt = new Date().toISOString();
+        const scheduleCampaign = getScheduleCampaign(campaign, req.workspaceScopeId);
+        const usesDefaultPublishingSettings = !campaign.publishingSettings || campaign.publishingSettings.enabled !== true;
+        const publishingSettings = validatePublishingSettings(
+            usesDefaultPublishingSettings
+                ? defaultPublishingSettings(campaign, campaign.pages || [])
+                : campaign.publishingSettings,
+            campaign.pages || [],
+            campaign.timezone
+        );
         Object.assign(campaign, {
-            status: "active",
-            scheduleId: schedule.id,
-            activatedAt,
-            updatedAt: activatedAt
+            imageIds: scheduleCampaign.imageIds,
+            resourceAssignments: scheduleCampaign.resourceAssignments,
+            matchingHistory: scheduleCampaign.matchingHistory,
+            publishingSettings
         });
-        if (!persistCampaigns()) {
-            Object.assign(campaign, previous);
-            if (!schedulerRoute.removeAutomaticCampaignSchedule(campaign.id, req.workspaceScopeId, schedule.id)) {
-                console.error("[automatic-campaigns] activation rollback could not remove the newly created schedule", campaign.id);
-            }
-            return res.status(500).json({ error: "Campaign activation could not be saved to encrypted storage." });
-        }
-        res.json({ campaign, schedule, readiness });
-    } finally {
-        activationLocks.delete(campaign.id);
+    } catch (error) {
+        return res.status(409).json({ error: error.message || "Campaign resources could not be prepared for activation." });
     }
+    const readiness = getActivationReadiness(campaign, req.workspaceScopeId);
+    if (!readiness.ready) {
+        Object.assign(campaign, previous);
+        return res.status(409).json({
+            error: "Complete every campaign readiness check before activation.",
+            readiness
+        });
+    }
+
+    if (campaign.publishingSettings.automaticApproval && Array.isArray(campaign.aiContent)) {
+        campaign.aiContent = campaign.aiContent.map(content =>
+            content.status === "approved" ? content : { ...content, status: "approved" }
+        );
+    }
+    let schedule;
+    try {
+        schedule = schedulerRoute.createAutomaticCampaignSchedule({
+            campaign,
+            workspaceScopeId: req.workspaceScopeId
+        });
+    } catch (error) {
+        Object.assign(campaign, previous);
+        return res.status(409).json({ error: error.message || "The publishing schedule could not be activated." });
+    }
+
+    const activatedAt = new Date().toISOString();
+    Object.assign(campaign, {
+        status: "active",
+        scheduleId: schedule.id,
+        activatedAt,
+        updatedAt: activatedAt
+    });
+    if (!persistCampaigns()) {
+        Object.assign(campaign, previous);
+        if (!schedulerRoute.removeAutomaticCampaignSchedule(campaign.id, req.workspaceScopeId, schedule.id)) {
+            console.error("[automatic-campaigns] activation rollback could not remove the newly created schedule", campaign.id);
+        }
+        return res.status(500).json({ error: "Campaign activation could not be saved to encrypted storage." });
+    }
+    res.json({ campaign, schedule, readiness });
 });
 
 router.post("/:id/control", (req, res) => {
@@ -605,7 +558,6 @@ router.post("/", (req, res) => {
         pages: [],
         articleUrls: [],
         imageIds: [],
-        sharedPreviewEnabled: false,
         imageUsageHistory: [],
         matchingHistory: [],
         resourceAssignments: [],
@@ -634,7 +586,7 @@ router.patch("/:id", (req, res) => {
         return;
     }
     if (["active", "paused"].includes(campaign.status) &&
-        ["pages", "articleUrls", "imageIds", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled"]
+        ["pages", "articleUrls", "imageIds", "aiSettings", "publishingSettings", "currentStep"]
             .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
         return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
@@ -681,12 +633,6 @@ router.patch("/:id", (req, res) => {
             const step = Number(req.body.currentStep);
             if (!Number.isInteger(step) || step < 3 || step > 8) throw new Error("Campaign workflow step is invalid.");
             nextStep = Math.max(nextStep, step);
-        }
-        if (Object.prototype.hasOwnProperty.call(req.body || {}, "sharedPreviewEnabled")) {
-            if (typeof req.body.sharedPreviewEnabled !== "boolean") {
-                throw new Error("Clickable custom-image previews must be enabled or disabled.");
-            }
-            updates.sharedPreviewEnabled = req.body.sharedPreviewEnabled;
         }
         if (invalidatesPlan) {
             updates.resourceAssignments = [];

@@ -94,16 +94,6 @@ function findPageToken(workspaceScopeId, pageId) {
 async function publishScheduledPost(schedule, post) {
     const token = findPageToken(schedule.workspaceScopeId, post.pageId);
     if (!token) throw new Error("No Page access token. Reconnect Facebook and reload your Pages.");
-    if (post.sharedPreviewUrl) {
-        return publishToPage(
-            post.pageId,
-            token,
-            post.content,
-            undefined,
-            undefined,
-            post.utmUrl || post.sharedPreviewUrl
-        );
-    }
     if (post.libraryImageId) {
         const image = mediaLibrary.findImage(schedule.workspaceScopeId, post.libraryImageId);
         if (!image) throw new Error("The selected media-library image is no longer available.");
