@@ -477,26 +477,18 @@ test("creates draft campaigns and isolates them by workspace", async t => {
             body: JSON.stringify({
                 pages: [{ id: "page-b" }],
                 descriptionModeEnabled: true,
-                manualPostDescription: "Join our event this weekend.",
-                descriptionLink: "",
+                manualPostDescriptions: [
+                    "Join our event this weekend.",
+                    "Second post https://example.com/second",
+                    "Third post"
+                ],
                 currentStep: 4
             })
         });
         assert.equal(descriptionOnlySaved.status, 200);
-        const linkedDescription = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({ descriptionLink: "https://example.com/event" })
-        });
-        assert.equal(linkedDescription.status, 200);
-        assert.equal((await linkedDescription.json()).descriptionLink, "https://example.com/event");
-        const textOnlyDescription = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({ descriptionLink: "" })
-        });
-        assert.equal(textOnlyDescription.status, 200);
-        assert.equal((await textOnlyDescription.json()).descriptionLink, "");
+        const savedDescriptions = await descriptionOnlySaved.json();
+        assert.deepEqual(savedDescriptions.descriptionLinks, ["", "https://example.com/second", ""]);
+        assert.equal(savedDescriptions.manualPostDescriptions.length, 3);
 
         const descriptionOnlyStartAt = dateTimeAfterDays(3, "09:00");
         const descriptionOnlyEndAt = dateTimeAfterDays(6, "09:00");
@@ -534,11 +526,18 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const descriptionActivation = await descriptionOnlyActivated.json();
         assert.equal(descriptionActivation.campaign.status, "scheduled");
         assert.equal(descriptionActivation.schedule.posts.length, 4);
-        assert.ok(descriptionActivation.schedule.posts.every(post =>
-            post.content === "Join our event this weekend." &&
-            post.articleUrl === "" &&
-            post.utmUrl === ""
-        ));
+        assert.deepEqual(descriptionActivation.schedule.posts.map(post => post.caption), [
+            "Join our event this weekend.",
+            "Second post https://example.com/second",
+            "Third post",
+            "Join our event this weekend."
+        ]);
+        assert.deepEqual(descriptionActivation.schedule.posts.map(post => post.articleUrl), [
+            "",
+            "https://example.com/second",
+            "",
+            ""
+        ]);
     } finally {
         aiContent.generateContent = originalGenerateContent;
     }

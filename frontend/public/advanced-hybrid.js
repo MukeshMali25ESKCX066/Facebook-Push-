@@ -390,12 +390,9 @@
     }
   }
 
-  function descriptionLinkForPreview(description, explicitLink) {
-    let value = String(explicitLink || "").trim();
-    if (!value) {
-      value = (String(description || "").match(/https?:\/\/[^\s<>"')\]]+/i) || [""])[0]
-        .replace(/[.,;:!?]+$/, "");
-    }
+  function descriptionLinkForPreview(description) {
+    const value = (String(description || "").match(/https?:\/\/[^\s<>"')\]]+/i) || [""])[0]
+      .replace(/[.,;:!?]+$/, "");
     try {
       const url = new URL(value);
       return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.toString() : "";
@@ -404,8 +401,8 @@
     }
   }
 
-  function renderManualPostPreviews(campaign, description, explicitLink) {
-    const link = descriptionLinkForPreview(description, explicitLink);
+  function renderManualPostPreviews(campaign, description) {
+    const link = descriptionLinkForPreview(description);
     const captionText = String(description || "")
       .replace(/https?:\/\/[^\s<>"')\]]+/gi, "")
       .trim();
@@ -432,24 +429,84 @@
     return `<div class="ah-description-preview-grid">${card("mobile", "Mobile")}${card("laptop", "Desktop")}</div>`;
   }
 
+  function getCampaignDescriptions(campaign) {
+    const descriptions = Array.isArray(campaign.manualPostDescriptions)
+      ? campaign.manualPostDescriptions
+      : campaign.manualPostDescription
+        ? [campaign.manualPostDescription]
+        : [];
+    return descriptions.length ? descriptions : [""];
+  }
+
   function collectDescriptionSettings(form) {
     const campaign = getActiveCampaign();
+    const enabled = form.querySelector("#ah-description-mode-toggle").checked;
+    const descriptionInputs = [...form.querySelectorAll("[data-manual-description]")];
+    const savedDescriptions = state.descriptionSettingsDraft?.manualPostDescriptions ||
+      getCampaignDescriptions(campaign);
     return {
-      descriptionModeEnabled: form.querySelector("#ah-description-mode-toggle").checked,
-      manualPostDescription: form.querySelector("#ah-manual-post-description")?.value ?? campaign.manualPostDescription ?? "",
-      descriptionLink: form.querySelector("#ah-description-link")?.value.trim() ?? campaign.descriptionLink ?? ""
+      descriptionModeEnabled: enabled,
+      manualPostDescriptions: enabled || descriptionInputs.length
+        ? descriptionInputs.map(input => input.value)
+        : savedDescriptions
     };
   }
 
   function updateManualPostPreviews(form) {
     const settings = collectDescriptionSettings(form);
     state.descriptionSettingsDraft = settings;
-    const previews = root.querySelector("#ah-description-previews");
-    if (previews) previews.innerHTML = renderManualPostPreviews(
-      getActiveCampaign(),
-      settings.manualPostDescription,
-      settings.descriptionLink
-    );
+    for (const input of form.querySelectorAll("[data-manual-description]")) {
+      const preview = form.querySelector(`[data-description-preview="${input.dataset.manualDescription}"]`);
+      if (preview) preview.innerHTML = renderManualPostPreviews(getActiveCampaign(), input.value);
+    }
+  }
+
+  function parseNumberedDescriptions(text) {
+    const descriptions = [];
+    let currentLines = null;
+    const lines = String(text).replace(/^\uFEFF/, "").split(/\r?\n/);
+    for (const line of lines) {
+      const marker = line.match(/^\s*(\d+)\s*(?:[.)\-:]|[\t ]+)\s*(.*)$/);
+      if (marker) {
+        if (currentLines) descriptions.push(currentLines.join("\n").trim());
+        const expectedNumber = descriptions.length + 1;
+        if (Number(marker[1]) !== expectedNumber) {
+          throw new Error(`Number descriptions in order from 1. Expected ${expectedNumber}.`);
+        }
+        currentLines = [marker[2]];
+      } else if (currentLines) {
+        currentLines.push(line);
+      } else if (line.trim()) {
+        throw new Error("Each description in the text file must start with its number, such as 1. Description.");
+      }
+    }
+    if (currentLines) descriptions.push(currentLines.join("\n").trim());
+    if (!descriptions.length) throw new Error("The text file contains no numbered descriptions.");
+    if (descriptions.length > 200) throw new Error("Add no more than 200 descriptions.");
+    if (descriptions.some(description => !description)) {
+      throw new Error("Each numbered description must contain text.");
+    }
+    if (descriptions.some(description => description.length > 5000)) {
+      throw new Error("Each description must be 5,000 characters or fewer.");
+    }
+    return descriptions;
+  }
+
+  function renderDescriptionEntries(campaign, descriptions) {
+    return descriptions.map((description, index) => `
+      <article class="ah-description-entry">
+        <div class="ah-description-entry-heading">
+          <strong>Description ${index + 1}</strong>
+          ${descriptions.length > 1
+            ? `<button type="button" class="ah-button ah-button-danger" data-ah-action="remove-description" data-description-index="${index}">Remove</button>`
+            : ""}
+        </div>
+        <label class="ah-field" for="ah-manual-post-description-${index}">
+          Description text
+          <textarea id="ah-manual-post-description-${index}" data-manual-description="${index}" aria-label="Description ${index + 1}" rows="5" maxlength="5000" placeholder="Enter description ${index + 1}. A link in this text is detected automatically." required>${escapeHtml(description)}</textarea>
+        </label>
+        <div data-description-preview="${index}">${renderManualPostPreviews(campaign, description)}</div>
+      </article>`).join("");
   }
 
   function renderDescriptionSettings() {
@@ -460,10 +517,12 @@
     }
     const settings = state.descriptionSettingsDraft || {
       descriptionModeEnabled: campaign.descriptionModeEnabled === true,
-      manualPostDescription: campaign.manualPostDescription || "",
-      descriptionLink: campaign.descriptionLink || ""
+      manualPostDescriptions: getCampaignDescriptions(campaign)
     };
     const enabled = settings.descriptionModeEnabled === true;
+    const descriptions = settings.manualPostDescriptions?.length
+      ? settings.manualPostDescriptions
+      : [""];
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
@@ -475,20 +534,18 @@
               <span class="ah-preview-switch-track" aria-hidden="true"></span>
               <strong>Publish from my description (URL Library optional)</strong>
             </label>
-            <p>When on, the campaign uses your text for every scheduled post. Article URLs and AI captions are not required. You can add one optional link for Facebook and mobile/desktop previews.</p>
+            <p>When on, numbered descriptions rotate across Pages and schedule slots. Article URLs and AI captions aren’t required. Any link in a description is detected automatically.</p>
           </section>
           ${enabled ? `
-            <label class="ah-field">Description to repeat in every post
-              <textarea id="ah-manual-post-description" rows="6" maxlength="5000" placeholder="Write the exact post description you want repeated." required>${escapeHtml(settings.manualPostDescription)}</textarea>
-            </label>
-            <label class="ah-field">Optional link
-              <input id="ah-description-link" type="url" maxlength="2000" value="${escapeHtml(settings.descriptionLink)}" placeholder="https://yourwebsite.com/article">
-            </label>
-            <p class="ah-help-text">A single https:// or http:// link may also be included in the description. If provided, it will appear as the Facebook link destination and in both previews.</p>
-            <div id="ah-description-previews">${renderManualPostPreviews(campaign, settings.manualPostDescription, settings.descriptionLink)}</div>
+            <div class="ah-description-list">${renderDescriptionEntries(campaign, descriptions)}</div>
+            <div class="ah-import-controls">
+              <button type="button" class="ah-button ah-button-secondary" data-ah-action="add-description">Add Description</button>
+              <label class="ah-button ah-button-secondary ah-file-button">Import numbered .txt<input id="ah-description-file" type="file" accept=".txt,text/plain"></label>
+            </div>
+            <p class="ah-help-text">Start each entry with its number, such as 1. First post; following lines stay with that description. Add up to 200 descriptions. Each can include one public HTTP(S) link, detected automatically and shown in mobile and desktop previews. Import a numbered .txt file up to 1 MB to replace the current list.</p>
           ` : `<div class="ah-inline-warning">Turn on description publishing to skip the URL Library and enter the text for your posts.</div>`}
           <div class="ah-form-footer">
-            <span>${enabled ? "The description repeats at each slot in your saved campaign schedule." : "URL-based publishing is unchanged while this toggle is off."}</span>
+            <span>${enabled ? "Descriptions rotate by Page and schedule slot, then repeat from number 1." : "URL-based publishing is unchanged while this toggle is off."}</span>
             <div class="ah-form-actions">
               <button type="submit" class="ah-button">Save Description Settings</button>
               ${enabled
@@ -747,11 +804,16 @@
       return;
     }
     if (campaign.descriptionModeEnabled) {
+      const descriptions = getCampaignDescriptions(campaign);
       root.innerHTML = `
         ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
         <section class="ah-panel ah-workflow-panel">
-          <div class="ah-panel-heading"><div><p class="ah-kicker">Campaign description</p><h2>Mobile and desktop preview</h2><p>The saved description and optional link used by the campaign schedule.</p></div></div>
-          ${renderManualPostPreviews(campaign, campaign.manualPostDescription, campaign.descriptionLink)}
+          <div class="ah-panel-heading"><div><p class="ah-kicker">Campaign descriptions</p><h2>Mobile and desktop previews</h2><p>Links in each description are detected automatically.</p></div></div>
+          ${descriptions.map((description, index) => `
+            <details class="ah-description-preview-details">
+              <summary>Description ${index + 1}</summary>
+              ${renderManualPostPreviews(campaign, description)}
+            </details>`).join("")}
           <button type="button" class="ah-button ah-button-secondary" data-ah-action="post-description">Edit Description</button>
         </section>`;
       return;
@@ -1355,9 +1417,17 @@
     const form = root.querySelector("#ah-description-settings-form");
     if (!form) return;
     const descriptionSettings = collectDescriptionSettings(form);
-    if (descriptionSettings.descriptionModeEnabled && !descriptionSettings.manualPostDescription.trim()) {
+    const descriptions = descriptionSettings.manualPostDescriptions.map(description => description.trim());
+    if (descriptionSettings.descriptionModeEnabled &&
+        (!descriptions.length || descriptions.some(description => !description))) {
       state.descriptionSettingsDraft = descriptionSettings;
-      state.workflowMessage = "Enter the description that should repeat in every scheduled post.";
+      state.workflowMessage = "Fill in or remove every empty description before saving.";
+      renderDescriptionSettings();
+      return;
+    }
+    if (descriptions.length > 200) {
+      state.descriptionSettingsDraft = descriptionSettings;
+      state.workflowMessage = "Add no more than 200 descriptions.";
       renderDescriptionSettings();
       return;
     }
@@ -1372,8 +1442,9 @@
       Object.assign(campaign, updated);
       state.descriptionSettingsDraft = {
         descriptionModeEnabled: updated.descriptionModeEnabled === true,
-        manualPostDescription: updated.manualPostDescription || "",
-        descriptionLink: updated.descriptionLink || ""
+        manualPostDescriptions: Array.isArray(updated.manualPostDescriptions)
+          ? updated.manualPostDescriptions
+          : updated.manualPostDescription ? [updated.manualPostDescription] : []
       };
       state.workflowMessage = updated.descriptionModeEnabled
         ? "Repeating description saved. Configure or keep the campaign schedule, then review it."
@@ -1387,6 +1458,27 @@
       state.workflowMessage = error.message;
     }
     if (state.currentView === "post-description" && state.activeCampaignId === campaign.id) renderDescriptionSettings();
+  }
+
+  async function importDescriptionFile(file) {
+    try {
+      if (!file.name.toLowerCase().endsWith(".txt")) {
+        throw new Error("Choose a plain-text .txt file.");
+      }
+      if (file.size > 1024 * 1024) {
+        throw new Error("Description text files must be 1 MB or smaller.");
+      }
+      const descriptions = parseNumberedDescriptions(await file.text());
+      state.descriptionSettingsDraft = {
+        descriptionModeEnabled: true,
+        manualPostDescriptions: descriptions
+      };
+      state.workflowMessage = `Loaded ${descriptions.length} numbered description(s). This replaced the previous list; save to keep the import.`;
+      renderDescriptionSettings();
+    } catch (error) {
+      state.workflowMessage = error.message;
+      renderDescriptionSettings();
+    }
   }
 
   async function importArticleFile(file) {
@@ -2054,6 +2146,24 @@
       void saveArticleUrls("publishing-settings");
     } else if (action === "save-description-and-schedule") {
       void saveDescriptionSettings(true);
+    } else if (action === "add-description") {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) {
+        const settings = collectDescriptionSettings(form);
+        settings.manualPostDescriptions.push("");
+        state.descriptionSettingsDraft = settings;
+        state.workflowMessage = "";
+        renderDescriptionSettings();
+      }
+    } else if (action === "remove-description") {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) {
+        const settings = collectDescriptionSettings(form);
+        settings.manualPostDescriptions.splice(Number(control.dataset.descriptionIndex), 1);
+        state.descriptionSettingsDraft = settings;
+        state.workflowMessage = "";
+        renderDescriptionSettings();
+      }
     } else if (action === "save-image-metadata") {
       void saveImageMetadata(control.dataset.imageId);
     } else if (action === "delete-image") {
@@ -2116,7 +2226,7 @@
 
   root.addEventListener("input", event => {
     const target = event.target;
-    if (["ah-manual-post-description", "ah-description-link"].includes(target.id)) {
+    if (target.matches("[data-manual-description]")) {
       const form = root.querySelector("#ah-description-settings-form");
       if (form) updateManualPostPreviews(form);
     } else if (target.id === "ah-image-search") {
@@ -2153,6 +2263,10 @@
         state.descriptionSettingsDraft = collectDescriptionSettings(form);
         renderDescriptionSettings();
       }
+    } else if (target.id === "ah-description-file" && target.files[0]) {
+      const file = target.files[0];
+      target.value = "";
+      void importDescriptionFile(file);
     } else if (target.id === "ah-url-file" && target.files[0]) {
       void importArticleFile(target.files[0]);
     } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {

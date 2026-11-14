@@ -61,6 +61,13 @@
 .ah-error { margin:0 0 12px; border:1px solid #fecdca; border-radius:9px; padding:10px 12px; background:#fef3f2; color:#b42318; font-size:11px; }
 .ah-preview-mode { display:grid; gap:7px; border:1px solid #dbe5f4; border-radius:10px; padding:12px; background:#f8faff; }
 .ah-preview-mode p { margin:0; color:var(--ah-muted); font-size:10px; line-height:1.55; }
+.ah-description-list { display:grid; gap:12px; }
+.ah-description-entry { display:grid; gap:9px; border:1px solid #dbe5f4; border-radius:10px; padding:12px; background:#fff; }
+.ah-description-entry-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#344054; font-size:11px; }
+.ah-description-entry .ah-field { margin:0; }
+.ah-description-preview-details { margin-top:10px; border:1px solid #dbe5f4; border-radius:9px; padding:9px 11px; background:#fff; }
+.ah-description-preview-details summary { color:#344054; cursor:pointer; font-size:11px; font-weight:700; }
+.ah-description-preview-details[open] summary { margin-bottom:10px; }
 .ah-description-preview-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .ah-description-preview-card { display:grid; min-width:0; gap:7px; }
 .ah-description-preview-card h3 { margin:0; color:#344054; font-size:11px; }

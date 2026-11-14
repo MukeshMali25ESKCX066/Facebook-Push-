@@ -155,27 +155,63 @@ function validateCommonHashtags(value) {
     return normalized;
 }
 
-function validateManualDescription(campaign) {
-    const manualPostDescription = String(campaign.manualPostDescription || "").trim();
-    if (!manualPostDescription) throw new Error("Enter the description that should repeat in every scheduled post.");
-    if (manualPostDescription.length > 5000) throw new Error("The repeating description must be 5,000 characters or fewer.");
-
-    const embeddedLinks = [...manualPostDescription.matchAll(/https?:\/\/[^\s<>"')\]]+/gi)]
-        .map(([url]) => url.replace(/[.,;:!?]+$/, ""));
-    if (embeddedLinks.length > 1) throw new Error("Use one link at most in the repeating description.");
-
-    const explicitLink = String(campaign.descriptionLink || "").trim();
-    const embeddedLink = embeddedLinks[0] || "";
-    const validatedExplicitLink = explicitLink ? validateArticleUrls([{ url: explicitLink }])[0].url : "";
-    const validatedEmbeddedLink = embeddedLink ? validateArticleUrls([{ url: embeddedLink }])[0].url : "";
-    if (validatedExplicitLink && validatedEmbeddedLink && validatedExplicitLink !== validatedEmbeddedLink) {
-        throw new Error("Use the same link in the description and optional link field, or remove one of them.");
+function normalizeManualPostDescriptions(value, { required = false } = {}) {
+    if (!Array.isArray(value)) throw new Error("Descriptions must be provided as a numbered list.");
+    if (value.length > 200) throw new Error("Add no more than 200 descriptions.");
+    const descriptions = value.map((description, index) => {
+        if (typeof description !== "string") {
+            throw new Error(`Description ${index + 1} must be text.`);
+        }
+        const normalized = description.trim();
+        if (normalized.length > 5000) {
+            throw new Error(`Description ${index + 1} must be 5,000 characters or fewer.`);
+        }
+        if (required && !normalized) throw new Error(`Enter description ${index + 1}.`);
+        return normalized;
+    });
+    const nonempty = descriptions.filter(Boolean);
+    if (required && !nonempty.length) throw new Error("Add at least one description to publish.");
+    if (required && nonempty.length !== descriptions.length) {
+        throw new Error("Fill in or remove every empty description before saving.");
     }
+    return descriptions;
+}
 
-    return {
-        manualPostDescription,
-        descriptionLink: validatedExplicitLink || validatedEmbeddedLink
-    };
+function descriptionLinkFromText(description, index) {
+    const links = [...description.matchAll(/https?:\/\/[^\s<>"')\]]+/gi)]
+        .map(([url]) => url.replace(/[.,;:!?]+$/, ""));
+    if (links.length > 1) throw new Error(`Description ${index + 1} can contain only one link.`);
+    return links.length ? validateArticleUrls([{ url: links[0] }])[0].url : "";
+}
+
+function validateManualDescriptions(campaign) {
+    let descriptions = Array.isArray(campaign.manualPostDescriptions) && campaign.manualPostDescriptions.length
+        ? campaign.manualPostDescriptions
+        : null;
+    if (!descriptions) {
+        const legacyDescription = String(campaign.manualPostDescription || "").trim();
+        const legacyLink = String(campaign.descriptionLink || "").trim();
+        if (legacyDescription) {
+            const embeddedLink = (legacyDescription.match(/https?:\/\/[^\s<>"')\]]+/i) || [""])[0]
+                .replace(/[.,;:!?]+$/, "");
+            if (legacyLink && embeddedLink) {
+                const validatedLegacyLink = validateArticleUrls([{ url: legacyLink }])[0].url;
+                const validatedEmbeddedLink = validateArticleUrls([{ url: embeddedLink }])[0].url;
+                if (validatedLegacyLink !== validatedEmbeddedLink) {
+                    throw new Error("The saved description has conflicting links. Edit it before publishing.");
+                }
+            } else if (legacyLink) {
+                descriptions = [`${legacyDescription}\n${legacyLink}`];
+            } else {
+                descriptions = [legacyDescription];
+            }
+        } else {
+            descriptions = [];
+        }
+    }
+    const manualPostDescriptions = normalizeManualPostDescriptions(descriptions, { required: true });
+    const descriptionLinks = manualPostDescriptions.map(descriptionLinkFromText);
+    return { manualPostDescriptions, descriptionLinks };
 }
 
 function getScheduleCampaign(campaign, workspaceScopeId) {
@@ -185,25 +221,24 @@ function getScheduleCampaign(campaign, workspaceScopeId) {
     const availableImageIds = new Set(availableImages.map(image => String(image.id)));
     const selectedPages = campaign.pages || [];
     if (campaign.descriptionModeEnabled === true) {
-        const description = validateManualDescription(campaign);
-        const articles = description.descriptionLink
-            ? validateArticleUrls([{ url: description.descriptionLink }])
-            : [];
+        const description = validateManualDescriptions(campaign);
+        const articleUrls = [...new Set(description.descriptionLinks.filter(Boolean))]
+            .map(url => ({ url, status: "Ready" }));
         return {
             ...campaign,
             ...description,
-            articleUrls: articles,
+            articleUrls,
             imageIds: availableImages.map(image => image.id),
-            resourceAssignments: [{
-                roundIndex: 0,
+            resourceAssignments: description.manualPostDescriptions.map((_text, roundIndex) => ({
+                roundIndex,
                 assignments: selectedPages.map((page, index) => ({
                     pageId: String(page.id),
                     pageName: String(page.name || ""),
-                    articleUrl: description.descriptionLink,
+                    articleUrl: description.descriptionLinks[roundIndex],
                     imageId: availableImages[index % Math.max(availableImages.length, 1)]?.id || "",
-                    roundIndex: 0
+                    roundIndex
                 }))
-            }],
+            })),
             matchingHistory: campaign.matchingHistory || []
         };
     }
@@ -259,12 +294,12 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     let descriptionReady = false;
     let descriptionSettings = null;
     let articlesMessage = "Add at least one valid public article URL.";
-    let descriptionMessage = "Enter the description that should repeat in every scheduled post.";
+    let descriptionMessage = "Add at least one description to publish.";
     try {
         if (descriptionMode) {
-            descriptionSettings = validateManualDescription(campaign);
+            descriptionSettings = validateManualDescriptions(campaign);
             descriptionReady = true;
-            descriptionMessage = "The saved description will repeat for every scheduled post.";
+            descriptionMessage = `${descriptionSettings.manualPostDescriptions.length} numbered description(s) will rotate across Pages and schedule slots.`;
         } else {
             const articles = validateArticleUrls(campaign.articleUrls || []);
             articlesReady = articles.length > 0;
@@ -287,21 +322,21 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
         : selectedImageCount
             ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
             : descriptionMode
-                ? descriptionSettings?.descriptionLink
-                    ? "No images selected; Facebook can show a preview for the optional description link."
-                    : "No images selected; the repeating description will publish as a text post."
+                ? descriptionSettings?.descriptionLinks.some(Boolean)
+                    ? "No images selected; links found in descriptions will be included in the Facebook posts."
+                    : "No images selected; descriptions without links will publish as text posts."
                 : "No images selected; posts will link directly to the article.");
     const previewConfigurationReady = !campaign.sharedPreviewEnabled || sharedPreviewStore.isConfigured();
     const sharedPreviewReady = !campaign.sharedPreviewEnabled ||
         (availableImageCount > 0 && previewConfigurationReady &&
-            (!descriptionMode || Boolean(descriptionSettings?.descriptionLink)));
+        (!descriptionMode || descriptionSettings?.descriptionLinks.every(Boolean)));
     check("Clickable custom-image previews", sharedPreviewReady,
         !campaign.sharedPreviewEnabled
             ? "Off. Selected images use the existing publishing behavior."
             : !availableImageCount
                 ? "Select at least one available image to use custom-image preview links."
-                : descriptionMode && !descriptionSettings?.descriptionLink
-                    ? "Add one public link to the description or turn off custom-image previews."
+                : descriptionMode && !descriptionSettings?.descriptionLinks.every(Boolean)
+                    ? "Add one public link to every description or turn off custom-image previews."
                 : previewConfigurationReady
                     ? "On. Selected images will appear in preview links and visitors will be redirected to the article."
                     : "Configure PostgreSQL, Cloudflare R2, and the HTTPS preview and media domains on the backend.");
@@ -331,7 +366,7 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     const contentReady = descriptionMode ? descriptionReady : articlesReady;
     check(descriptionMode ? "Description publishing" : "Article link publishing", contentReady, contentReady
         ? descriptionMode
-            ? "The repeating description will publish directly; a link is optional."
+            ? `${descriptionSettings.manualPostDescriptions.length} description(s) will rotate across Pages and schedule slots.`
             : "Captions, images, and resource matching are optional; article links can publish directly."
         : descriptionMode
             ? descriptionMessage
@@ -678,6 +713,7 @@ router.post("/", (req, res) => {
         imageIds: [],
         sharedPreviewEnabled: false,
         descriptionModeEnabled: false,
+        manualPostDescriptions: [],
         manualPostDescription: "",
         descriptionLink: "",
         imageUsageHistory: [],
@@ -709,7 +745,7 @@ router.patch("/:id", (req, res) => {
         return;
     }
     if (["active", "paused", "scheduled"].includes(campaign.status) &&
-        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled", "descriptionModeEnabled", "manualPostDescription", "descriptionLink"]
+        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled", "descriptionModeEnabled", "manualPostDescriptions", "manualPostDescription", "descriptionLink"]
             .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
         return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
@@ -737,6 +773,11 @@ router.patch("/:id", (req, res) => {
             updates.descriptionModeEnabled = req.body.descriptionModeEnabled;
             descriptionModeChanged = updates.descriptionModeEnabled !== campaign.descriptionModeEnabled;
         }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "manualPostDescriptions")) {
+            updates.manualPostDescriptions = normalizeManualPostDescriptions(
+                req.body.manualPostDescriptions
+            );
+        }
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "manualPostDescription")) {
             if (typeof req.body.manualPostDescription !== "string") {
                 throw new Error("Enter the repeating description as text.");
@@ -756,7 +797,7 @@ router.patch("/:id", (req, res) => {
                 : "";
         }
         if (updates.descriptionModeEnabled ?? campaign.descriptionModeEnabled) {
-            Object.assign(updates, validateManualDescription({ ...campaign, ...updates }));
+            Object.assign(updates, validateManualDescriptions({ ...campaign, ...updates }));
         }
         if (descriptionModeChanged) nextStep = 4;
         if (Object.prototype.hasOwnProperty.call(req.body || {}, "imageIds")) {

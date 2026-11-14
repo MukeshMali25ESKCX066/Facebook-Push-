@@ -470,8 +470,8 @@ test("repeats a manual description across the required schedule without URL reso
     const campaign = {
         campaignName: "Manual description campaign",
         descriptionModeEnabled: true,
-        manualPostDescription: "Join our event this weekend.",
-        descriptionLink: "",
+        manualPostDescriptions: ["Join our event this weekend."],
+        descriptionLinks: [""],
         commonHashtags: ["#PageCrew"],
         pages: [pages[0]],
         articleUrls: [],
@@ -494,13 +494,14 @@ test("repeats a manual description across the required schedule without URL reso
 
     assert.equal(schedule.posts.length, 3);
     assert.ok(schedule.posts.every(post =>
-        post.caption === campaign.manualPostDescription &&
+        post.caption === campaign.manualPostDescriptions[0] &&
         post.content === "Join our event this weekend.\n\n#PageCrew" &&
         post.articleUrl === "" &&
         post.utmUrl === ""
     ));
 
-    campaign.descriptionLink = "https://example.com/event";
+    campaign.manualPostDescriptions = ["Join our event this weekend. https://example.com/event"];
+    campaign.descriptionLinks = ["https://example.com/event"];
     const linkedSchedule = generateAutomaticSchedule({
         campaign,
         settings,
@@ -508,8 +509,67 @@ test("repeats a manual description across the required schedule without URL reso
     });
     assert.equal(linkedSchedule.posts.length, 3);
     assert.ok(linkedSchedule.posts.every(post =>
-        post.caption === campaign.manualPostDescription &&
-        post.articleUrl === campaign.descriptionLink &&
+        post.caption === campaign.manualPostDescriptions[0] &&
+        post.articleUrl === campaign.descriptionLinks[0] &&
         post.utmUrl.includes("utm_source=facebook")
     ));
+});
+
+test("rotates numbered descriptions by Page and slot, then starts again at the first description", () => {
+    const rotationPages = [
+        { id: "page-1", name: "Page 1" },
+        { id: "page-2", name: "Page 2" },
+        { id: "page-3", name: "Page 3" }
+    ];
+    const descriptions = [
+        "Description 1 https://example.com/one",
+        "Description 2 https://example.com/two",
+        "Description 3 https://example.com/three"
+    ];
+    const links = [
+        "https://example.com/one",
+        "https://example.com/two",
+        "https://example.com/three"
+    ];
+    const campaign = {
+        campaignName: "Rotating descriptions",
+        descriptionModeEnabled: true,
+        manualPostDescriptions: descriptions,
+        descriptionLinks: links,
+        pages: rotationPages,
+        articleUrls: links.map(url => ({ url })),
+        imageIds: [],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-17T09:00",
+        repeatResources: false,
+        pageSettings: Object.fromEntries(rotationPages.map(page => [
+            page.id,
+            { intervalMinutes: 60, dailyPostLimit: 1 }
+        ]))
+    }, rotationPages);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    });
+
+    assert.equal(schedule.posts.length, 9);
+    assert.equal(new Set(schedule.posts.map(post => post.contentId)).size, 9);
+    for (const [pageIndex, page] of rotationPages.entries()) {
+        const pagePosts = schedule.posts
+            .filter(post => post.pageId === page.id)
+            .sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
+        assert.equal(pagePosts.length, 3);
+        for (const [slotIndex, post] of pagePosts.entries()) {
+            const descriptionIndex = (pageIndex + slotIndex) % descriptions.length;
+            assert.equal(post.caption, descriptions[descriptionIndex]);
+            assert.equal(post.articleUrl, links[descriptionIndex]);
+            assert.equal(post.utmUrl.includes("utm_source=facebook"), true);
+        }
+    }
 });
