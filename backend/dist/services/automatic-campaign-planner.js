@@ -316,7 +316,8 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 : Math.floor(index * slots.length / pagePosts.length);
             const slot = slots[slotIndex];
             const postContent = pagePosts[index % pagePosts.length];
-            const articleUrl = postContent.assignment.articleUrl;
+            const originalArticleUrl = postContent.assignment.articleUrl;
+            const articleUrl = postContent.assignment.previewUrl || originalArticleUrl;
             const utmUrl = schedulerCore.makeTrackingUrl(
                 articleUrl,
                 campaign.campaignName,
@@ -334,8 +335,9 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 hashtags: postContent.hashtags || [],
                 articleUrl,
                 utmUrl,
+                ...(postContent.assignment.previewUrl ? { sharedPreviewUrl: postContent.assignment.previewUrl } : {}),
                 content: schedulerCore.buildCaption(postContent),
-                libraryImageId: postContent.imageId,
+                libraryImageId: postContent.assignment.previewUrl ? "" : postContent.imageId,
                 imageId: "",
                 postType: campaign.campaignType || "Campaign",
                 purpose: "Website traffic",

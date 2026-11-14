@@ -164,6 +164,50 @@ test("builds a fixed-interval queue within daily times and per-Page limits", () 
     assert.equal(schedule.pages[0].minimumGapMinutes, 120);
 });
 
+test("schedules preview mode through the preview URL without attaching the library image", () => {
+    const previewUrl = "https://share.example.test/p/unique-preview";
+    const campaign = {
+        campaignName: "Preview campaign",
+        campaignType: "Article",
+        startDate: "2026-11-13",
+        endDate: "2026-11-13",
+        pages: [pages[0]],
+        articleUrls: [{ url: "https://example.com/story", title: "Story" }],
+        imageIds: ["image-a"],
+        resourceAssignments: [{
+            roundIndex: 0,
+            assignments: [{
+                pageId: pages[0].id,
+                pageName: pages[0].name,
+                articleUrl: "https://example.com/story",
+                imageId: "image-a",
+                previewUrl,
+                roundIndex: 0
+            }]
+        }],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        allowedHours: { start: "09:00", end: "10:00" },
+        scheduleDays: { Friday: { enabled: true } },
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } },
+        repeatResources: false
+    }, [pages[0]]);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-12T00:00:00.000Z")
+    });
+
+    assert.equal(schedule.posts.length, 1);
+    assert.equal(schedule.posts[0].articleUrl, previewUrl);
+    assert.equal(new URL(schedule.posts[0].utmUrl).origin, "https://share.example.test");
+    assert.equal(schedule.posts[0].sharedPreviewUrl, previewUrl);
+    assert.equal(schedule.posts[0].libraryImageId, "");
+});
+
 test("publishes at fixed five-minute intervals and repeats assigned resources when enabled", () => {
     const page = pages[0];
     const campaign = {
