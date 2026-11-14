@@ -16,7 +16,13 @@ async function publishJobToPages(job, { getPageToken, publishToPage, persist }) 
         }
 
         try {
-            publishedPostIds[pageId] = await publishToPage(pageId, pageToken, job.content, job.media);
+            publishedPostIds[pageId] = await publishToPage(
+                pageId,
+                pageToken,
+                job.content,
+                job.media,
+                job.media ? { disableMediaLinkPreview: true } : undefined
+            );
         }
         catch (error) {
             pageErrors[pageId] = error instanceof Error ? error.message : "Facebook publish failed.";

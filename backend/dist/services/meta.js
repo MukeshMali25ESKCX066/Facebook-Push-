@@ -10,12 +10,12 @@ function firstUrl(text) {
         return undefined;
     return match[0].replace(/[.,;:!?]+$/, "");
 }
-async function publishToPage(pageId, pageToken, message, media, scheduledAt, destinationUrl) {
+async function publishToPage(pageId, pageToken, message, media, scheduledAt, destinationUrl, options = {}) {
     const publishAt = scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : undefined;
     let res;
     if (media) {
         const isVideo = media.mimeType.startsWith("video/");
-        const link = destinationUrl || firstUrl(message);
+        const link = options.disableMediaLinkPreview ? undefined : destinationUrl || firstUrl(message);
         const body = new FormData();
         if (!isVideo && link) {
             body.append("message", message);

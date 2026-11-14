@@ -240,7 +240,15 @@ async function scheduleOnFacebook(job) {
         if (!token)
             continue;
         try {
-            ids[pageId] = await (0, meta_js_1.publishToPage)(pageId, token, job.content, job.media, at);
+            ids[pageId] = await (0, meta_js_1.publishToPage)(
+                pageId,
+                token,
+                job.content,
+                job.media,
+                at,
+                undefined,
+                { disableMediaLinkPreview: true }
+            );
         }
         catch (error) {
             console.error("Facebook schedule failed for page", pageId, error);
@@ -283,7 +291,8 @@ async function publishJob(job) {
 async function publishJobCore(job) {
     await (0, publishing_js_1.publishJobToPages)(job, {
         getPageToken: (pageId) => findPageToken(job.ownerScopeId, pageId),
-        publishToPage: (pageId, pageToken, content, media) => (0, meta_js_1.publishToPage)(pageId, pageToken, content, media),
+        publishToPage: (pageId, pageToken, content, media, options) =>
+            (0, meta_js_1.publishToPage)(pageId, pageToken, content, media, undefined, undefined, options),
         persist: saveJob
     });
 }

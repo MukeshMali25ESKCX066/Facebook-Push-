@@ -101,6 +101,61 @@ test("publishes an uploaded campaign image as a clickable link preview without a
     }
 });
 
+test("disables link previews for uploaded-media jobs in the standard composer pipeline", async () => {
+    let receivedOptions;
+    const job = {
+        pageIds: ["page-a"],
+        content: "Article URL https://example.com/story",
+        media: { path: "manual.png", mimeType: "image/png", originalName: "manual.png" },
+        status: "scheduled"
+    };
+
+    await publishJobToPages(job, {
+        getPageToken: () => "page-token",
+        publishToPage: async (_pageId, _pageToken, _content, _media, options) => {
+            receivedOptions = options;
+            return "manual-post-id";
+        },
+        persist: async () => {}
+    });
+
+    assert.deepEqual(receivedOptions, { disableMediaLinkPreview: true });
+    assert.equal(job.publishedPostIds["page-a"], "manual-post-id");
+});
+
+test("publishes manually uploaded composer images as photos without a link-preview override", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pagecrew-publishing-"));
+    const mediaPath = join(directory, "manual-upload.png");
+    const originalFetch = global.fetch;
+    let request;
+
+    try {
+        await writeFile(mediaPath, Buffer.from("test image"));
+        global.fetch = async (url, options) => {
+            request = { url, options };
+            return Response.json({ id: "manual-photo-post-1" });
+        };
+
+        const caption = "Read this article: https://example.com/story";
+        const postId = await publishToPage("page-1", "page-token", caption, {
+            path: mediaPath,
+            mimeType: "image/png",
+            originalName: "manual-upload.png"
+        }, undefined, undefined, { disableMediaLinkPreview: true });
+
+        assert.equal(postId, "manual-photo-post-1");
+        assert.equal(request.url, "https://graph.facebook.com/v23.0/page-1/photos");
+        assert.equal(request.options.body.get("caption"), caption);
+        assert.equal(request.options.body.get("access_token"), "page-token");
+        assert.equal(request.options.body.has("thumbnail"), false);
+        assert.equal(request.options.body.has("link"), false);
+    }
+    finally {
+        global.fetch = originalFetch;
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
 test("surfaces Facebook Graph API errors with the provider error code", async () => {
     const originalFetch = global.fetch;
     global.fetch = async () => Response.json({
