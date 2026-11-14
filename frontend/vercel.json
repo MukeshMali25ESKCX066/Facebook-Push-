@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/p/:slug",
+      "destination": "https://facebook-push.onrender.com/p/:slug"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://facebook-push.onrender.com/api/:path*"
     },

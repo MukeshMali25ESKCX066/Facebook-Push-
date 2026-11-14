@@ -16,6 +16,7 @@ const scheduler_js_1 = __importDefault(require("./routes/scheduler.js"));
 const analytics_js_1 = __importDefault(require("./routes/analytics.js"));
 const automaticCampaigns_js_1 = __importDefault(require("./routes/automatic-campaigns.js"));
 const mediaLibrary_js_1 = __importDefault(require("./routes/media-library.js"));
+const sharedPreviews = require("./routes/shared-previews.js");
 const app = (0, express_1.default)();
 app.set("trust proxy", 1);
 app.use((req, res, next) => {
@@ -68,6 +69,8 @@ app.use("/api/scheduler", scheduler_js_1.default);
 app.use("/api/analytics", analytics_js_1.default);
 app.use("/api/automatic-campaigns", automaticCampaigns_js_1.default);
 app.use("/api/media-library", mediaLibrary_js_1.default);
+app.use("/api/shared-previews", sharedPreviews.apiRouter);
+app.use("/", sharedPreviews.publicRouter);
 app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     const candidateStatus = Number(error.status || error.statusCode);
