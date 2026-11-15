@@ -2,14 +2,25 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
+const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pagecrew-auth-"));
 process.env.DATABASE_URL = "";
+process.env.PAGECREW_DATA_DIR = dataDirectory;
+process.env.HOME = dataDirectory;
+process.env.ENCRYPTION_KEY = "auth-approval-test-encryption-key";
 process.env.SUPER_ADMIN_EMAIL = "approval-admin@example.test";
 process.env.SUPER_ADMIN_PASSWORD = "ApprovalAdmin!123";
 process.env.PAGECREW_SSO_SECRET = "test-pagecrew-sso-secret-with-at-least-32-chars";
 
 const express = require("express");
+const initialExitHandlers = new Set(process.listeners("exit"));
 const authRouter = require("../dist/routes/auth.js").default;
+for (const listener of process.listeners("exit")) {
+    if (!initialExitHandlers.has(listener)) process.removeListener("exit", listener);
+}
 const app = express();
 app.use(express.json());
 app.use("/api/auth", authRouter);
@@ -25,6 +36,7 @@ test("registrations need admin approval before login and workspace access", asyn
     if (!server.listening) await new Promise(resolve => server.once("listening", resolve));
     t.after(async () => {
         await new Promise(resolve => server.close(resolve));
+        fs.rmSync(dataDirectory, { recursive: true, force: true });
     });
 
     const baseUrl = `http://127.0.0.1:${server.address().port}/api/auth`;
@@ -140,4 +152,54 @@ test("registrations need admin approval before login and workspace access", asyn
     assert.equal(claims.sub, registrationBody.user.id);
     assert.equal(claims.email, user.email);
     assert.ok(claims.exp > Math.floor(Date.now() / 1000));
+
+    const userLogout = await fetch(`${baseUrl}/logout`, {
+        method: "POST",
+        headers: { cookie: getCookies(approvedLogin) }
+    });
+    assert.equal(userLogout.status, 200);
+    assert.equal((await userLogout.json()).redirectTo, "/login");
+
+    const adminLogout = await fetch(`${baseUrl}/logout`, {
+        method: "POST",
+        headers: { cookie: adminCookies }
+    });
+    assert.equal(adminLogout.status, 200);
+    assert.equal((await adminLogout.json()).redirectTo, "/");
+
+    const encryptedUsers = fs.readFileSync(path.join(dataDirectory, "local-users.enc"));
+    const encryptionKey = require("node:crypto").createHash("sha256").update(process.env.ENCRYPTION_KEY).digest();
+    const decipher = require("node:crypto").createDecipheriv("aes-256-gcm", encryptionKey, encryptedUsers.subarray(0, 12));
+    decipher.setAuthTag(encryptedUsers.subarray(12, 28));
+    const storedUsers = JSON.parse(Buffer.concat([
+        decipher.update(encryptedUsers.subarray(28)),
+        decipher.final()
+    ]).toString("utf8"));
+    const storedUser = storedUsers.find(candidate => candidate.email === user.email);
+    assert.ok(storedUser.passwordHash);
+    assert.equal("password" in storedUser, false);
+
+    const authPath = require.resolve("../dist/routes/auth.js");
+    delete require.cache[authPath];
+    const restartedApp = express();
+    restartedApp.use(express.json());
+    const exitHandlersBeforeRestart = new Set(process.listeners("exit"));
+    restartedApp.use("/api/auth", require("../dist/routes/auth.js").default);
+    for (const listener of process.listeners("exit")) {
+        if (!exitHandlersBeforeRestart.has(listener)) process.removeListener("exit", listener);
+    }
+    const restartedServer = restartedApp.listen(0, "127.0.0.1");
+    await new Promise(resolve => restartedServer.once("listening", resolve));
+    try {
+        const afterRestart = await fetch(`http://127.0.0.1:${restartedServer.address().port}/api/auth/login`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: user.email, password: user.password })
+        });
+        assert.equal(afterRestart.status, 200);
+        assert.equal((await afterRestart.json()).user.status, "approved");
+    }
+    finally {
+        await new Promise(resolve => restartedServer.close(resolve));
+    }
 });

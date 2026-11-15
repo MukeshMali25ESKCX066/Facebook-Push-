@@ -1,0 +1,321 @@
+
+/* PAGECREW — WHITE, GOLD & BLACK THEME */
+
+:root {
+  --lux-white: #ffffff;
+  --lux-cream: #faf8f2;
+  --lux-black: #111111;
+  --lux-gold: #d4af37;
+  --lux-gold-dark: #a7821d;
+  --lux-border: #e9dfc8;
+  --lux-muted: #666666;
+  --lux-shadow: 0 12px 35px rgba(0, 0, 0, 0.06);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--lux-white);
+  color: var(--lux-black);
+}
+
+/* Main website sections */
+
+.hero,
+.tools-section,
+.how-section,
+.how-it-works,
+.unique-section,
+.schedule-section,
+.analytics-section,
+.pf-pricing-section,
+.pf-faq-section,
+.pf-cta-section {
+  background: var(--lux-white) !important;
+  color: var(--lux-black);
+}
+
+/* Alternate section backgrounds */
+
+.unique-section,
+.analytics-section,
+.pf-faq-section {
+  background: var(--lux-cream) !important;
+}
+
+/* Premium headings */
+
+.hero h1,
+.tools-section h2,
+.unique-heading h2,
+.schedule-heading h2,
+.analytics-heading h2,
+.pf-heading h2,
+.pf-cta-box h2 {
+  color: var(--lux-black);
+}
+
+/* Golden gradient text */
+
+.unique-heading h2 span,
+.schedule-heading h2 span,
+.analytics-heading h2 span,
+.pf-heading h2 span {
+  background: linear-gradient(
+    110deg,
+    #9b7417,
+    #d4af37,
+    #b68d25
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Eyebrows */
+
+.unique-eyebrow,
+.schedule-eyebrow,
+.analytics-eyebrow,
+.pf-eyebrow,
+.fb-eyebrow {
+  color: var(--lux-gold-dark);
+}
+
+/* Light cards */
+
+.unique-post-card,
+.schedule-panel,
+.schedule-stat,
+.analytics-panel,
+.analytics-stat-card,
+.analytics-campaign,
+.pf-plan-card,
+.fb-page-card,
+.fb-summary-card,
+.dash-stat,
+.dash-content-card {
+  background: #ffffff !important;
+  border: 1px solid var(--lux-border) !important;
+  color: var(--lux-black);
+  box-shadow: var(--lux-shadow);
+}
+
+/* Card headings */
+
+.unique-post-card h3,
+.schedule-panel h3,
+.analytics-panel h3,
+.analytics-campaign h4,
+.pf-plan-card h3,
+.fb-page-card h3,
+.dash-content-card h2 {
+  color: var(--lux-black);
+}
+
+/* Muted descriptions */
+
+.unique-heading p,
+.unique-post-body p,
+.schedule-heading p,
+.analytics-heading p,
+.pf-heading p,
+.pf-plan-description,
+.fb-pages-heading p,
+.dash-welcome p {
+  color: var(--lux-muted);
+}
+
+/* Buttons */
+
+.pf-plan-button,
+.pf-cta-button,
+.fb-primary-button,
+.auth-submit {
+  background: var(--lux-black);
+  color: var(--lux-gold);
+  border: 1px solid var(--lux-gold);
+}
+
+.pf-plan-button:hover,
+.pf-cta-button:hover,
+.fb-primary-button:hover,
+.auth-submit:hover {
+  background: var(--lux-gold);
+  color: var(--lux-black);
+}
+
+/* Interactive filters */
+
+.schedule-filters button,
+.analytics-filters button {
+  background: #f7f4ec;
+  color: var(--lux-black);
+  border: 1px solid var(--lux-border);
+}
+
+.schedule-filters button.active,
+.analytics-filters button.active {
+  background: var(--lux-black);
+  color: var(--lux-gold);
+  border-color: var(--lux-gold);
+}
+
+/* FAQ */
+
+.pf-faq-item {
+  background: #ffffff;
+  border: 1px solid var(--lux-border);
+}
+
+.pf-faq-question {
+  color: var(--lux-black);
+}
+
+.pf-faq-answer {
+  color: var(--lux-muted);
+}
+
+/* CTA */
+
+.pf-cta-box {
+  background: linear-gradient(135deg, #111111, #29251b);
+  border-color: var(--lux-gold);
+  color: white;
+}
+
+.pf-cta-box h2 {
+  color: white;
+}
+
+.pf-cta-glow {
+  background: var(--lux-gold);
+}
+
+/* Footer stays black for premium contrast */
+
+.pf-footer {
+  background: #111111;
+  border-top: 2px solid var(--lux-gold);
+}
+
+/* Authentication */
+
+.auth-page {
+  background: var(--lux-cream);
+  color: var(--lux-black);
+}
+
+.auth-glow {
+  background: var(--lux-gold);
+}
+
+.auth-card {
+  background: white;
+  color: var(--lux-black);
+  border: 1px solid var(--lux-border);
+}
+
+.auth-logo,
+.auth-heading h1 {
+  color: var(--lux-black);
+}
+
+.auth-logo svg,
+.auth-heading span,
+.auth-switch a {
+  color: var(--lux-gold-dark);
+}
+
+.auth-input {
+  background: #faf8f2;
+  border-color: var(--lux-border);
+}
+
+.auth-input input {
+  color: var(--lux-black);
+}
+
+.auth-form label {
+  color: #333333;
+}
+
+/* Dashboard */
+
+.dash-layout {
+  background: #faf8f2;
+  color: var(--lux-black);
+}
+
+.dash-sidebar {
+  background: #111111;
+  border-right: 1px solid var(--lux-gold);
+}
+
+.dash-brand svg,
+.dash-nav-link.active {
+  color: var(--lux-gold);
+}
+
+.dash-nav-link.active,
+.dash-nav-link:hover {
+  background: #d4af3720;
+}
+
+.dash-topbar {
+  background: white;
+  border-bottom: 1px solid var(--lux-border);
+}
+
+.dash-topbar > span,
+.dash-welcome h1 {
+  color: var(--lux-black);
+}
+
+.dash-avatar {
+  background: var(--lux-gold);
+  color: var(--lux-black);
+}
+
+/* Facebook Pages */
+
+.fb-pages {
+  color: var(--lux-black);
+}
+
+.fb-page-card > p,
+.fb-page-meta span,
+.fb-summary-card span {
+  color: var(--lux-muted);
+}
+
+.fb-search {
+  background: white;
+  border-color: var(--lux-border);
+}
+
+.fb-search input {
+  color: var(--lux-black);
+}
+
+.fb-modal {
+  background: white;
+  color: var(--lux-black);
+}
+
+.fb-modal form input {
+  background: #faf8f2;
+  color: var(--lux-black);
+  border-color: var(--lux-border);
+}
+
+/* Premium gold hover */
+
+.pf-plan-card:hover,
+.fb-page-card:hover,
+.unique-post-card:hover {
+  border-color: var(--lux-gold) !important;
+  box-shadow: 0 20px 45px rgba(166, 127, 30, 0.13);
+}

@@ -1,20 +1,58 @@
 services:
   - type: web
-    name: pagecrew-pushdesk
+    name: facebook-push
     runtime: node
     plan: free
-    rootDir: push-notification
-    buildCommand: npm install
+    rootDir: backend
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
+      - key: FRONTEND_URL
+        value: https://pagecrew.vercel.app
+      - key: PUSHPILOT_PUBLIC_URL
+        value: https://pagecrew.vercel.app/pushpilot
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_REDIRECT_URI
+        sync: false
+      - key: META_SCOPE
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GA4_PROPERTY_ID
+        sync: false
+      - key: GA4_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
       - key: VAPID_SUBJECT
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CLOUDINARY_UPLOAD_PRESET
         sync: false
       - key: ALLOW_SIGNUP
         value: "false"

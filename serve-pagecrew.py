@@ -6,49 +6,75 @@ from urllib.request import Request, urlopen
 
 
 BACKEND = "http://127.0.0.1:4000"
-FRONTEND = Path(__file__).resolve().parent / "frontend" / "public"
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+PUBLIC = FRONTEND_DIR / "public"
+BUILD = FRONTEND_DIR / "dist"
+FRONTEND = BUILD if BUILD.is_dir() else PUBLIC
 
 
 class PageCrewHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(FRONTEND), **kwargs)
 
+    def should_proxy(self):
+        path = urlsplit(self.path).path
+        return path.startswith("/api/") or path.startswith((
+            "/pushpilot/api/",
+            "/pushpilot/public/",
+            "/pushpilot/sdk/",
+            "/pushpilot/demo/",
+            "/pushpilot/uploads/"
+        ))
+
     def do_GET(self):
-        if self.path.startswith("/api/"):
+        if self.should_proxy():
             self.proxy()
             return
         route = urlsplit(self.path)
-        if route.path.rstrip("/") == "/advanced-hybrid":
-            self.path = "/advanced-hybrid.html" + (f"?{route.query}" if route.query else "")
-        elif route.path.rstrip("/") == "/dashboard-choice":
-            self.path = "/dashboard-choice.html" + (f"?{route.query}" if route.query else "")
-        elif route.path.rstrip("/") == "/push-notification":
-            self.path = "/push-notification.html" + (f"?{route.query}" if route.query else "")
+        route_targets = {
+            "/advanced-hybrid": "/advanced-hybrid.html",
+            "/dashboard-choice": "/dashboard-choice.html",
+            "/push-notification": "/push-notification.html",
+            "/legacy": "/legacy.html",
+            "/event-campaigns": "/event-campaigns.html",
+            "/analytics": "/analytics.html",
+            "/scheduler": "/scheduler.html",
+            "/ai-content": "/ai-content.html"
+        }
+        target = route_targets.get(route.path.rstrip("/"))
+        if target:
+            self.path = target + (f"?{route.query}" if route.query else "")
         requested = (FRONTEND / urlsplit(self.path).path.lstrip("/")).resolve()
         if not requested.is_relative_to(FRONTEND.resolve()) or not requested.is_file():
             self.path = "/index.html"
         super().do_GET()
 
     def do_POST(self):
-        if self.path.startswith("/api/"):
+        if self.should_proxy():
             self.proxy()
             return
         self.send_error(404)
 
     def do_PUT(self):
-        if self.path.startswith("/api/"):
+        if self.should_proxy():
             self.proxy()
             return
         self.send_error(404)
 
     def do_PATCH(self):
-        if self.path.startswith("/api/"):
+        if self.should_proxy():
             self.proxy()
             return
         self.send_error(404)
 
     def do_DELETE(self):
-        if self.path.startswith("/api/"):
+        if self.should_proxy():
+            self.proxy()
+            return
+        self.send_error(404)
+
+    def do_OPTIONS(self):
+        if self.should_proxy():
             self.proxy()
             return
         self.send_error(404)

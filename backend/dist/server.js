@@ -6,8 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
+const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-dotenv_1.default.config();
+dotenv_1.default.config({ path: path.resolve(__dirname, "..", ".env") });
 const auth_js_1 = __importDefault(require("./routes/auth.js"));
 const pages_js_1 = __importDefault(require("./routes/pages.js"));
 const posts_js_1 = __importDefault(require("./routes/posts.js"));
@@ -17,6 +18,7 @@ const analytics_js_1 = __importDefault(require("./routes/analytics.js"));
 const automaticCampaigns_js_1 = __importDefault(require("./routes/automatic-campaigns.js"));
 const mediaLibrary_js_1 = __importDefault(require("./routes/media-library.js"));
 const sharedPreviews = require("./routes/shared-previews.js");
+const pushPilot = require("../pushpilot/server/index.js");
 const app = (0, express_1.default)();
 app.set("trust proxy", 1);
 app.use((req, res, next) => {
@@ -47,7 +49,7 @@ const allowedOrigins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174"
 ].filter(Boolean);
-app.use((0, cors_1.default)({
+const pageCrewCors = (0, cors_1.default)({
     credentials: true,
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) {
@@ -58,7 +60,15 @@ app.use((0, cors_1.default)({
         error.status = 403;
         callback(error);
     }
-}));
+});
+app.use((req, res, next) => {
+    if (req.path.startsWith("/pushpilot/public/") || req.path.startsWith("/pushpilot/sdk/")) {
+        next();
+        return;
+    }
+    pageCrewCors(req, res, next);
+});
+app.use("/pushpilot", pushPilot.app);
 app.use(express_1.default.json({ limit: "20mb" }));
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "SocialPilot Hub" }));
 app.use("/api/auth", auth_js_1.default);
@@ -91,4 +101,7 @@ app.use((error, req, res, next) => {
     });
 });
 const port = Number(process.env.PORT || 4000);
-app.listen(port, () => console.log(`SocialPilot Hub API running on http://localhost:${port}`));
+app.listen(port, () => {
+    pushPilot.startScheduler();
+    console.log(`SocialPilot Hub API running on http://localhost:${port}`);
+});

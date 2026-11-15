@@ -25,10 +25,7 @@
       hidden></iframe>
   </main>
   <script>
-    const localHosts = ["localhost", "127.0.0.1"];
-    const serviceUrl = localHosts.includes(location.hostname)
-      ? "http://127.0.0.1:3000/app"
-      : "https://pagecrew-pushdesk.onrender.com/app";
+    const serviceUrl = `${location.origin}/pushpilot/app.html`;
     const frame = document.getElementById("pushdesk-frame");
     const status = document.getElementById("handoff-status");
     window.addEventListener("message", (event) => {
@@ -39,9 +36,9 @@
         return;
       }
       if (event.data.type === "pushpilot:logout") {
-        window.location.replace("/dashboard-choice");
+        window.location.replace("/login");
       } else if (event.data.dashboard === "pagecrew") {
-        window.location.replace("/#dashboard");
+        window.location.replace("/legacy#dashboard");
       }
     });
     (async () => {
@@ -58,8 +55,8 @@
         frame.src = `${serviceUrl}#sso=${encodeURIComponent(result.token)}`;
         frame.hidden = false;
         status.hidden = true;
-      } catch {
-        status.textContent = "Could not open Push Pilot automatically. Return to the dashboard chooser and try again.";
+      } catch (error) {
+        status.textContent = `Could not open Push Pilot automatically: ${error.message}`;
       }
     })();
   </script>

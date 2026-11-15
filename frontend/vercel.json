@@ -9,12 +9,52 @@
       "destination": "https://facebook-push.onrender.com/api/:path*"
     },
     {
+      "source": "/pushpilot/api/:path*",
+      "destination": "https://facebook-push.onrender.com/pushpilot/api/:path*"
+    },
+    {
+      "source": "/pushpilot/public/:path*",
+      "destination": "https://facebook-push.onrender.com/pushpilot/public/:path*"
+    },
+    {
+      "source": "/pushpilot/sdk/:path*",
+      "destination": "https://facebook-push.onrender.com/pushpilot/sdk/:path*"
+    },
+    {
+      "source": "/pushpilot/demo/:path*",
+      "destination": "https://facebook-push.onrender.com/pushpilot/demo/:path*"
+    },
+    {
+      "source": "/pushpilot/uploads/:path*",
+      "destination": "https://facebook-push.onrender.com/pushpilot/uploads/:path*"
+    },
+    {
       "source": "/advanced-hybrid",
       "destination": "/advanced-hybrid.html"
     },
     {
       "source": "/advanced-hybrid/",
       "destination": "/advanced-hybrid.html"
+    },
+    {
+      "source": "/legacy",
+      "destination": "/legacy.html"
+    },
+    {
+      "source": "/event-campaigns",
+      "destination": "/event-campaigns.html"
+    },
+    {
+      "source": "/analytics",
+      "destination": "/analytics.html"
+    },
+    {
+      "source": "/scheduler",
+      "destination": "/scheduler.html"
+    },
+    {
+      "source": "/ai-content",
+      "destination": "/ai-content.html"
     },
     {
       "source": "/dashboard-choice",

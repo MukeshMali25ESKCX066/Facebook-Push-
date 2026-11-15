@@ -7,7 +7,8 @@
     if (method === "POST" && requestUrl
       && new URL(requestUrl, window.location.href).pathname.replace(/\/+$/, "").endsWith("/api/auth/logout")
       && response.ok) {
-      window.location.replace("/dashboard-choice");
+      const result = await response.clone().json().catch(() => ({}));
+      window.location.replace(result.redirectTo === "/" ? "/" : "/login");
     }
     return response;
   };

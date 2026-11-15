@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta property="og:title" content="PageCrew" />
+		<meta property="og:description" content="Schedule and publish posts to multiple Facebook Pages." />
+		<meta property="og:image" content="https://pagecrew.vercel.app/pagecrew-logo.png" />
+		<meta property="og:url" content="https://pagecrew.vercel.app/" />
+		<link rel="icon" type="image/png" href="/pagecrew-logo.png" />
+		<title>PageCrew</title>
+		<script src="/logout-redirect.js"></script>
+		<script>
+			const legacyAuthRoute = window.location.hash.toLowerCase().replace(/^#\/?/, "").split(/[/?]/)[0];
+			if (legacyAuthRoute === "login" || legacyAuthRoute === "signin") {
+				window.location.replace("/login");
+			} else if (legacyAuthRoute === "signup" || legacyAuthRoute === "register") {
+				window.location.replace("/signup");
+			} else {
+				const legacyApp = document.createElement("script");
+				legacyApp.type = "module";
+				legacyApp.crossOrigin = "anonymous";
+				legacyApp.src = "/assets/index-C1luc8ST.js";
+				document.head.appendChild(legacyApp);
+			}
+		</script>
+		<link rel="stylesheet" crossorigin href="/assets/index-CX7T7O2L.css">
+		<link rel="stylesheet" href="/standard-auto-publishing.css">
+		<link rel="stylesheet" href="/dashboard-switch.css">
+	</head>
+	<body>
+		<div id="root"></div>
+
+		<script src="/dashboard-switch.js"></script>
+		<script src="/event-campaign-nav.js"></script>
+	</body>
+</html>

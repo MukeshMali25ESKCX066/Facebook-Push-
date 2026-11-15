@@ -1,12 +1,26 @@
 {
+  "installCommand": "npm ci --prefix frontend",
+  "buildCommand": "npm run build --prefix frontend",
+  "outputDirectory": "frontend/dist",
   "rewrites": [
     { "source": "/dashboard-choice", "destination": "/dashboard-choice.html" },
     { "source": "/dashboard-choice/", "destination": "/dashboard-choice.html" },
     { "source": "/push-notification", "destination": "/push-notification.html" },
     { "source": "/push-notification/", "destination": "/push-notification.html" },
+    { "source": "/legacy", "destination": "/legacy.html" },
+    { "source": "/event-campaigns", "destination": "/event-campaigns.html" },
+    { "source": "/analytics", "destination": "/analytics.html" },
+    { "source": "/scheduler", "destination": "/scheduler.html" },
+    { "source": "/ai-content", "destination": "/ai-content.html" },
     { "source": "/p/:slug", "destination": "https://facebook-push.onrender.com/p/:slug" },
+    { "source": "/pushpilot/api/:path*", "destination": "https://facebook-push.onrender.com/pushpilot/api/:path*" },
+    { "source": "/pushpilot/public/:path*", "destination": "https://facebook-push.onrender.com/pushpilot/public/:path*" },
+    { "source": "/pushpilot/sdk/:path*", "destination": "https://facebook-push.onrender.com/pushpilot/sdk/:path*" },
+    { "source": "/pushpilot/demo/:path*", "destination": "https://facebook-push.onrender.com/pushpilot/demo/:path*" },
+    { "source": "/pushpilot/uploads/:path*", "destination": "https://facebook-push.onrender.com/pushpilot/uploads/:path*" },
     { "source": "/api/:path*", "destination": "https://facebook-push.onrender.com/api/:path*" },
     { "source": "/advanced-hybrid", "destination": "/advanced-hybrid.html" },
-    { "source": "/advanced-hybrid/", "destination": "/advanced-hybrid.html" }
+    { "source": "/advanced-hybrid/", "destination": "/advanced-hybrid.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

@@ -36,11 +36,67 @@ const DEFAULT_SESSION_ID = "__default__";
 const sessionStore = new Map();
 const memoryUsers = new Map();
 const authSessionStore = new Map();
+const localUsersDirectory = process.env.PAGECREW_DATA_DIR || (0, node_path_1.resolve)(__dirname, "../../pagecrew-data");
+const localUsersPath = (0, node_path_1.resolve)(localUsersDirectory, "local-users.enc");
 const pendingAdminLogins = new Map();
 const adminTotpManagementAttempts = new Map();
 const pool = process.env.DATABASE_URL ? new serverless_1.Pool({ connectionString: process.env.DATABASE_URL }) : null;
 const paymentUploadDirectory = (0, node_path_1.resolve)(__dirname, "../../uploads/payments");
 (0, node_fs_1.mkdirSync)(paymentUploadDirectory, { recursive: true });
+function loadLocalUsers() {
+    if (pool)
+        return;
+    const encryptionKey = process.env.ENCRYPTION_KEY;
+    const legacyPath = (0, node_path_1.resolve)(localUsersDirectory, "local-users.json");
+    if (!encryptionKey && ((0, node_fs_1.existsSync)(localUsersPath) || (0, node_fs_1.existsSync)(legacyPath)))
+        throw new Error("ENCRYPTION_KEY must be configured to persist local accounts.");
+    if (!encryptionKey)
+        return;
+    if (!(0, node_fs_1.existsSync)(localUsersPath) && (0, node_fs_1.existsSync)(legacyPath)) {
+        const legacyUsers = JSON.parse((0, node_fs_1.readFileSync)(legacyPath, "utf8"));
+        validateLocalUsers(legacyUsers);
+        for (const user of legacyUsers)
+            memoryUsers.set(user.email.trim().toLowerCase(), user);
+        persistLocalUsers();
+        (0, node_fs_1.unlinkSync)(legacyPath);
+        return;
+    }
+    if (!(0, node_fs_1.existsSync)(localUsersPath))
+        return;
+    const encrypted = (0, node_fs_1.readFileSync)(localUsersPath);
+    if (encrypted.length < 29)
+        throw new Error(`Local account store is invalid: ${localUsersPath}`);
+    const key = (0, node_crypto_1.createHash)("sha256").update(encryptionKey).digest();
+    const decipher = (0, node_crypto_1.createDecipheriv)("aes-256-gcm", key, encrypted.subarray(0, 12));
+    decipher.setAuthTag(encrypted.subarray(12, 28));
+    const plaintext = Buffer.concat([decipher.update(encrypted.subarray(28)), decipher.final()]).toString("utf8");
+    const storedUsers = JSON.parse(plaintext);
+    validateLocalUsers(storedUsers);
+    for (const user of storedUsers)
+        memoryUsers.set(user.email.trim().toLowerCase(), user);
+}
+function validateLocalUsers(storedUsers) {
+    if (!Array.isArray(storedUsers) || storedUsers.some((user) => !user || typeof user.id !== "string" || typeof user.email !== "string" || typeof user.passwordHash !== "string" || !["user", "admin"].includes(user.role))) {
+        throw new Error("Local account store has an invalid format.");
+    }
+}
+function persistLocalUsers() {
+    if (pool)
+        return;
+    const encryptionKey = process.env.ENCRYPTION_KEY;
+    if (!encryptionKey)
+        throw new Error("ENCRYPTION_KEY must be configured to persist local accounts.");
+    const temporaryPath = `${localUsersPath}.${process.pid}.tmp`;
+    const key = (0, node_crypto_1.createHash)("sha256").update(encryptionKey).digest();
+    const iv = (0, node_crypto_1.randomBytes)(12);
+    const cipher = (0, node_crypto_1.createCipheriv)("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([cipher.update(JSON.stringify([...memoryUsers.values()]), "utf8"), cipher.final()]);
+    const encrypted = Buffer.concat([iv, cipher.getAuthTag(), ciphertext]);
+    (0, node_fs_1.mkdirSync)((0, node_path_1.dirname)(localUsersPath), { recursive: true });
+    (0, node_fs_1.writeFileSync)(temporaryPath, encrypted, { mode: 0o600 });
+    (0, node_fs_1.renameSync)(temporaryPath, localUsersPath);
+}
+loadLocalUsers();
 let memoryPaymentQrPath = "";
 let memoryAdminTotpSettings = { enabled: false };
 const imageExtensions = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
@@ -152,6 +208,7 @@ async function ensureDefaultAdminUser() {
             isApproved: true
         };
         memoryUsers.set(adminUser.email, adminUser);
+        persistLocalUsers();
     }
 }
 void initializeUserTable().catch(error => console.error("User table initialization failed:", error));
@@ -365,6 +422,7 @@ async function createUserRecord(name, email, password, profile) {
     }
     else {
         memoryUsers.set(normalizedEmail, newUser);
+        persistLocalUsers();
     }
     return newUser;
 }
@@ -522,6 +580,7 @@ async function updateUserPayment(user, fields) {
     }
     else {
         memoryUsers.set(user.email, updatedUser);
+        persistLocalUsers();
     }
     return updatedUser;
 }
@@ -1193,6 +1252,7 @@ router.post("/admin/approve-user", async (req, res) => {
     else {
         const updatedUser = { ...targetUser, status: "approved", isApproved: true };
         memoryUsers.set(targetUser.email, updatedUser);
+        persistLocalUsers();
     }
     const updated = await getUserById(userId);
     res.json({ ok: true, user: updated ? sanitizeUser(updated) : null });
@@ -1341,6 +1401,7 @@ router.post("/logout", async (req, res) => {
     const sessionId = getAuthSessionId(req);
     const authSession = authSessionStore.get(sessionId);
     const activeUserId = authSession?.activeUserId || "";
+    const activeUser = activeUserId ? await getUserById(activeUserId) : null;
     const userIds = authSession?.userIds || [];
     const remainingUserIds = userIds.filter((id) => id !== activeUserId);
     if (remainingUserIds.length) {
@@ -1356,7 +1417,13 @@ router.post("/logout", async (req, res) => {
                 pendingOAuthStates.delete(key);
         });
     }
-    res.json({ ok: true, connected: false, provider: "facebook", authenticated: false });
+    res.json({
+        ok: true,
+        connected: false,
+        provider: "facebook",
+        authenticated: false,
+        redirectTo: activeUser?.role === "admin" ? "/" : "/login"
+    });
 });
 router.get("/facebook/callback", async (req, res) => {
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
