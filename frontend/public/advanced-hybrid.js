@@ -461,14 +461,16 @@
       (Array.isArray(campaign.manualPostDescriptions)
         ? campaign.manualPostDescriptions
         : campaign.manualPostDescription ? [campaign.manualPostDescription] : []);
+    const savedDescriptionImageIds = state.descriptionSettingsDraft?.descriptionImageIds ||
+      getDescriptionImageIds(campaign, savedDescriptions.length);
     return {
       descriptionModeEnabled: enabled,
-      manualPostDescriptions: enabled || descriptionInputs.length
+      manualPostDescriptions: descriptionInputs.length
         ? descriptionInputs.map(input => input.value)
         : savedDescriptions,
-      descriptionImageIds: enabled || descriptionInputs.length
+      descriptionImageIds: descriptionInputs.length
         ? [...form.querySelectorAll("[data-description-image-id]")].map(input => input.value)
-        : getDescriptionImageIds(campaign, savedDescriptions.length),
+        : savedDescriptionImageIds,
       descriptionImagePoolIds: getDescriptionImagePoolIds(campaign)
     };
   }
@@ -585,7 +587,7 @@
     const descriptionImagePool = getDescriptionImagePoolIds(campaign);
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
-      <section class="ah-panel ah-workflow-panel">
+      <section class="ah-panel ah-workflow-panel ah-description-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 4 · Description Publishing</p><h2>Repeat your own description</h2><p>Turn this on to publish the same description in every post. The existing campaign schedule remains in effect.</p></div></div>
         <form id="ah-description-settings-form">
           <section class="ah-preview-mode">
@@ -695,7 +697,7 @@
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
-      <section class="ah-panel ah-workflow-panel">
+      <section class="ah-panel ah-workflow-panel ah-image-library-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 5 · Optional images</p><h2>Campaign image library</h2><p>Images are optional. Upload individual images, a folder, or a ZIP if you want image posts instead of link-only posts.</p></div></div>
         <section class="ah-preview-mode" aria-label="Clickable custom-image previews">
           <label class="ah-preview-switch">
@@ -754,7 +756,7 @@
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       ${state.imageLoadError ? `<div class="ah-error" role="alert">${escapeHtml(state.imageLoadError)}</div>` : ""}
-      <section class="ah-panel ah-workflow-panel">
+      <section class="ah-panel ah-workflow-panel ah-resource-preview-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 6 · Optional resource preview</p><h2>Preview Page and link assignments</h2><p>Optional: matching is automatic when the campaign starts. Images are never required and one link can be used across Pages.</p></div></div>
         <div class="ah-matching-summary">
           <article><strong>${pageCount}</strong><span>Pages</span></article>
@@ -963,7 +965,7 @@
     }).join("");
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
-      <section class="ah-panel ah-workflow-panel">
+      <section class="ah-panel ah-workflow-panel ah-campaign-schedule-panel">
         <div class="ah-panel-heading"><div><p class="ah-kicker">Step 8 · Required Campaign Schedule</p><h2>Set campaign start and end</h2><p>Posts are distributed evenly between these date-times. The campaign activates automatically at the start time.</p></div></div>
         <form id="ah-publishing-settings-form">
           <div class="ah-check-grid">
