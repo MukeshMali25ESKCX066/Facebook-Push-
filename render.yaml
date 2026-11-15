@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: pagecrew-pushdesk
+    runtime: node
+    plan: free
+    rootDir: push-notification
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: ALLOW_SIGNUP
+        value: "false"
+      - key: PAGECREW_SSO_SECRET
+        sync: false

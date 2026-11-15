@@ -1,0 +1,534 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const fs = require('fs').promises;
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { all, get, run, initDb, ensureSetting, diagnose } = require('./db');
+const { initPush, getPublicKey, sendCampaign, countAudience, SEGMENT_FIELDS } = require('./push');
+
+let waitUntil = null;
+if (process.env.VERCEL) { try { waitUntil = require('@vercel/functions').waitUntil; } catch (_) {} }
+
+const app = express();
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+const uploadDir = path.join(dataDir, 'uploads');
+const imageTypes = new Map([
+  ['image/png', 'png'],
+  ['image/jpeg', 'jpg'],
+  ['image/webp', 'webp'],
+  ['image/gif', 'gif']
+]);
+const maxImageUploadSize = 4 * 1024 * 1024;
+// Cloudinary image storage (CLOUDINARY_URL=cloudinary://KEY:SECRET@CLOUD or the 3 separate variables)
+const cldFromUrl = /^cloudinary:\/\/([^:]+):([^@]+)@(.+)$/.exec((process.env.CLOUDINARY_URL || '').trim()) || [];
+const cloudinaryCloudName = (process.env.CLOUDINARY_CLOUD_NAME || cldFromUrl[3] || '').trim();
+const cloudinaryApiKey = (process.env.CLOUDINARY_API_KEY || cldFromUrl[1] || '').trim();
+const cloudinaryApiSecret = (process.env.CLOUDINARY_API_SECRET || cldFromUrl[2] || '').trim();
+const cloudinaryFolder = (process.env.CLOUDINARY_FOLDER || 'pushdesk').trim();
+const cloudinaryUploadPreset = (process.env.CLOUDINARY_UPLOAD_PRESET || '').trim();
+
+let JWT_SECRET = process.env.JWT_SECRET || null;
+const ready = (async () => {
+  await initDb();
+  if (!JWT_SECRET) JWT_SECRET = await ensureSetting('jwt_secret', () => crypto.randomBytes(32).toString('hex'));
+  await initPush();
+})();
+ready.catch((e) => console.error('PushDesk boot failed:', e));
+app.get('/api/health', async (req, res) => {
+  try { await ready; res.json({ ok: true }); }
+  catch (e) {
+    let diagnostics = null;
+    try { diagnostics = await diagnose(); } catch (_) {}
+    res.status(500).json({ ok: false, error: String((e && e.message) || e).slice(0, 300), diagnostics });
+  }
+});
+app.use((req, res, next) => ready.then(() => next(), next));
+
+const origin = (req) => (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+const rand = (n) => crypto.randomBytes(n).toString('hex');
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// ---------- helpers ----------
+function parseUA(ua = '') {
+  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\/|Opera/.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung'
+    : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\/|CriOS/.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Other';
+  const os = /Windows/.test(ua) ? 'Windows' : /Android/.test(ua) ? 'Android' : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+    : /Mac OS X/.test(ua) ? 'macOS' : /Linux/.test(ua) ? 'Linux' : 'Other';
+  const device = /iPad|Tablet/.test(ua) ? 'Tablet' : /Mobile|Android|iPhone/.test(ua) ? 'Mobile' : 'Desktop';
+  return { browser, os, device };
+}
+const clean = (v, max = 500) => (v == null ? '' : String(v).trim().slice(0, max));
+const isUrl = (v) => !v || /^https?:\/\//i.test(v);
+const httpErr = (status, msg) => Object.assign(new Error(msg), { status });
+
+const auth = wrap(async (req, res, next) => {
+  const h = req.get('authorization') || '';
+  try {
+    const p = jwt.verify(h.replace(/^Bearer\s+/i, ''), JWT_SECRET);
+    req.user = await get('SELECT id,COALESCE(display_email,email) AS email FROM users WHERE id=?', [p.id]);
+    if (!req.user) throw new Error('no user');
+  } catch (_) { return res.status(401).json({ error: 'Unauthorized' }); }
+  next();
+});
+const ownSite = wrap(async (req, res, next) => {
+  const site = await get('SELECT * FROM sites WHERE id=? AND user_id=?', [req.params.id, req.user.id]);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  req.site = site; next();
+});
+const token = (u) => jwt.sign({ id: u.id }, JWT_SECRET, { expiresIn: '30d' });
+
+// ---------- auth ----------
+app.post('/api/auth/signup', wrap(async (req, res) => {
+  const count = (await get('SELECT COUNT(*) n FROM users')).n;
+  if (count > 0 && process.env.ALLOW_SIGNUP === 'false') return res.status(403).json({ error: 'Signups are disabled' });
+  const email = clean(req.body.email, 200).toLowerCase();
+  const password = String(req.body.password || '');
+  if (!/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (await get('SELECT 1 AS x FROM users WHERE email=?', [email])) return res.status(409).json({ error: 'Email already registered' });
+  const { id } = await run('INSERT INTO users(email,password_hash) VALUES(?,?)', [email, bcrypt.hashSync(password, 10)]);
+  res.json({ token: token({ id }), email });
+}));
+app.post('/api/auth/login', wrap(async (req, res) => {
+  const email = clean(req.body.email, 200).toLowerCase();
+  const u = await get('SELECT * FROM users WHERE email=?', [email]);
+  if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
+  res.json({ token: token(u), email: u.email });
+}));
+app.post('/api/auth/sso', wrap(async (req, res) => {
+  const secret = String(process.env.PAGECREW_SSO_SECRET || '').trim();
+  if (Buffer.byteLength(secret) < 32) return res.status(503).json({ error: 'PageCrew single sign-on is not configured' });
+
+  let claims;
+  try {
+    claims = jwt.verify(String(req.body.token || ''), secret, {
+      algorithms: ['HS256'],
+      issuer: 'pagecrew',
+      audience: 'pushpilot'
+    });
+  } catch (_) {
+    return res.status(401).json({ error: 'The PageCrew sign-in link is invalid or expired' });
+  }
+  const pageCrewUserId = typeof claims.sub === 'string' ? claims.sub : '';
+  const email = clean(claims.email, 200).toLowerCase();
+  const jti = typeof claims.jti === 'string' ? claims.jti : '';
+  if (claims.typ !== 'pagecrew-sso' || !pageCrewUserId || !jti || !Number.isInteger(claims.exp)
+    || !/^\S+@\S+\.\S+$/.test(email)) {
+    return res.status(401).json({ error: 'The PageCrew sign-in link is invalid or expired' });
+  }
+
+  await run('DELETE FROM sso_tokens WHERE expires_at<=?', [Date.now()]);
+  const consumed = await run('INSERT OR IGNORE INTO sso_tokens(jti,expires_at) VALUES(?,?)', [jti, claims.exp * 1000]);
+  if (consumed.changes !== 1) return res.status(401).json({ error: 'The PageCrew sign-in link has already been used' });
+
+  const internalEmail = `pagecrew-${crypto.createHash('sha256').update(pageCrewUserId).digest('hex')}@sso.invalid`;
+  await run('INSERT OR IGNORE INTO users(email,password_hash,pagecrew_user_id,display_email) VALUES(?,?,?,?)',
+    [internalEmail, bcrypt.hashSync(rand(32), 10), pageCrewUserId, email]);
+  const user = await get('SELECT id FROM users WHERE pagecrew_user_id=?', [pageCrewUserId]);
+  if (!user) throw httpErr(500, 'Could not create the Push Pilot account');
+  await run('UPDATE users SET display_email=? WHERE id=?', [email, user.id]);
+  res.json({ token: token(user), email });
+}));
+app.get('/api/me', auth, (req, res) => res.json({ ...req.user, base_url: origin(req) }));
+app.get('/api/cloudinary-config', auth, (req, res) => {
+  res.json({ configured: !!cloudinaryCloudName && !!(cloudinaryUploadPreset || (cloudinaryApiKey && cloudinaryApiSecret)),
+    cloudName: cloudinaryCloudName, uploadPreset: cloudinaryUploadPreset });
+});
+
+// ---------- sites ----------
+app.get('/api/sites', auth, wrap(async (req, res) => {
+  res.json(await all(`SELECT s.*, (SELECT COUNT(*) FROM subscribers WHERE site_id=s.id AND active=1) AS subscribers,
+    (SELECT COUNT(*) FROM campaigns WHERE site_id=s.id) AS campaigns FROM sites s WHERE user_id=? ORDER BY id DESC`, [req.user.id]));
+}));
+app.post('/api/sites', auth, wrap(async (req, res) => {
+  const name = clean(req.body.name, 100);
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  const domain = clean(req.body.domain, 200).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const { id } = await run('INSERT INTO sites(user_id,name,domain,site_key,api_key) VALUES(?,?,?,?,?)', [req.user.id, name, domain, rand(8), rand(24)]);
+  res.json(await get('SELECT * FROM sites WHERE id=?', [id]));
+}));
+app.get('/api/sites/:id', auth, ownSite, (req, res) => res.json(req.site));
+app.delete('/api/sites/:id', auth, ownSite, wrap(async (req, res) => {
+  await run('DELETE FROM subscribers WHERE site_id=?', [req.site.id]);
+  await run('DELETE FROM email_subscribers WHERE site_id=?', [req.site.id]);
+  await run('DELETE FROM campaigns WHERE site_id=?', [req.site.id]);
+  await run('DELETE FROM sites WHERE id=?', [req.site.id]);
+  res.json({ ok: true });
+}));
+app.post('/api/sites/:id/rotate-key', auth, ownSite, wrap(async (req, res) => {
+  const k = rand(24); await run('UPDATE sites SET api_key=? WHERE id=?', [k, req.site.id]); res.json({ api_key: k });
+}));
+
+app.post('/api/sites/:id/images', auth, ownSite, (req, res, next) => {
+  const type = (req.get('content-type') || '').split(';')[0].toLowerCase();
+  if (!imageTypes.has(type)) return next(httpErr(415, 'Upload a PNG, JPEG, WebP, or GIF image.'));
+  express.raw({ type: () => true, limit: maxImageUploadSize })(req, res, (error) => error ? next(error) : next());
+}, wrap(async (req, res) => {
+  const type = (req.get('content-type') || '').split(';')[0].toLowerCase();
+  const image = req.body;
+  if (!Buffer.isBuffer(image) || !image.length) throw httpErr(400, 'Choose an image to upload.');
+
+  const validSignature = type === 'image/png'
+    ? image.length >= 8 && image.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    : type === 'image/jpeg'
+      ? image.length >= 3 && image[0] === 255 && image[1] === 216 && image[2] === 255
+      : type === 'image/webp'
+        ? image.length >= 12 && image.toString('ascii', 0, 4) === 'RIFF' && image.toString('ascii', 8, 12) === 'WEBP'
+        : image.length >= 6 && ['GIF87a', 'GIF89a'].includes(image.toString('ascii', 0, 6));
+  if (!validSignature) throw httpErr(400, 'The file contents do not match the selected image type.');
+
+  const filename = `${rand(16)}.${imageTypes.get(type)}`;
+  if (process.env.VERCEL || cloudinaryCloudName || cloudinaryApiKey || cloudinaryApiSecret || cloudinaryUploadPreset) {
+    const signed = !!(cloudinaryApiKey && cloudinaryApiSecret);
+    if (!cloudinaryCloudName || (!signed && !cloudinaryUploadPreset)) {
+      throw httpErr(503, 'Image uploads need CLOUDINARY_CLOUD_NAME plus either CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET, or CLOUDINARY_UPLOAD_PRESET (unsigned). Configure them in Vercel and redeploy.');
+    }
+    const publicId = filename.replace(/\.[^.]+$/, '');
+    const form = new FormData();
+    form.append('file', new Blob([image], { type }), filename);
+    if (signed) {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = crypto.createHash('sha1')
+        .update(`folder=${cloudinaryFolder}&public_id=${publicId}&timestamp=${timestamp}${cloudinaryApiSecret}`).digest('hex');
+      form.append('api_key', cloudinaryApiKey);
+      form.append('timestamp', String(timestamp));
+      form.append('folder', cloudinaryFolder);
+      form.append('public_id', publicId);
+      form.append('signature', signature);
+    } else {
+      form.append('upload_preset', cloudinaryUploadPreset);
+    }
+    const cldResponse = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudinaryCloudName)}/image/upload`, { method: 'POST', body: form });
+    const cldData = await cldResponse.json().catch(() => ({}));
+    if (!cldResponse.ok || !cldData.secure_url) {
+      const reason = (cldData.error && cldData.error.message) || 'unknown error';
+      throw httpErr(502, `Cloudinary upload failed (HTTP ${cldResponse.status}): ${String(reason).slice(0, 150)}`);
+    }
+    return res.json({ url: cldData.secure_url });
+  }
+  await fs.mkdir(uploadDir, { recursive: true });
+  await fs.writeFile(path.join(uploadDir, filename), image, { flag: 'wx' });
+  res.json({ url: `${origin(req)}/uploads/${filename}` });
+}));
+
+app.get('/api/sites/:id/stats', auth, ownSite, wrap(async (req, res) => {
+  const id = req.site.id;
+  const n = async (sql) => (await get(sql, [id])).n;
+  const totals = {
+    active: await n("SELECT COUNT(*) n FROM subscribers WHERE site_id=? AND active=1 AND COALESCE(permission,'granted')='granted'"),
+    all: await n('SELECT COUNT(*) n FROM subscribers WHERE site_id=?'),
+    campaigns: await n('SELECT COUNT(*) n FROM campaigns WHERE site_id=?'),
+    sent: await n('SELECT COALESCE(SUM(sent),0) n FROM campaigns WHERE site_id=?'),
+    clicks: await n('SELECT COALESCE(SUM(clicks),0) n FROM campaigns WHERE site_id=?')
+  };
+  const breakdown = {};
+  await Promise.all(SEGMENT_FIELDS.map(async (f) => {
+    breakdown[f] = await all(`SELECT COALESCE(NULLIF(${f},''),'Unknown') AS label, COUNT(*) AS n FROM subscribers
+      WHERE site_id=? AND active=1 AND COALESCE(permission,'granted')='granted' GROUP BY label ORDER BY n DESC LIMIT 20`, [id]);
+  }));
+  const daily = await all(`SELECT date(created_at) d, COUNT(*) n FROM subscribers WHERE site_id=? AND created_at >= date('now','-13 days')
+    GROUP BY d ORDER BY d`, [id]);
+  res.json({ totals, breakdown, daily });
+}));
+
+app.get('/api/sites/:id/subscribers', auth, ownSite, wrap(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1), size = 50;
+  const rows = await all(`SELECT id,browser,os,device,country,language,page,active,permission,created_at,last_seen FROM subscribers
+    WHERE site_id=? ORDER BY id DESC LIMIT ? OFFSET ?`, [req.site.id, size, (page - 1) * size]);
+  const total = (await get('SELECT COUNT(*) n FROM subscribers WHERE site_id=?', [req.site.id])).n;
+  res.json({ rows, total, page, size });
+}));
+app.get('/api/sites/:id/email-subscribers', auth, ownSite, wrap(async (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1), size = 50;
+  const rows = await all(`SELECT id,email,active,created_at FROM email_subscribers
+    WHERE site_id=? ORDER BY id DESC LIMIT ? OFFSET ?`, [req.site.id, size, (page - 1) * size]);
+  const total = (await get('SELECT COUNT(*) n FROM email_subscribers WHERE site_id=?', [req.site.id])).n;
+  res.json({ rows, total, page, size });
+}));
+app.delete('/api/sites/:id/email-subscribers/:eid', auth, ownSite, wrap(async (req, res) => {
+  await run('DELETE FROM email_subscribers WHERE id=? AND site_id=?', [req.params.eid, req.site.id]);
+  res.json({ ok: true });
+}));
+
+// ---------- campaigns ----------
+function normalizeSegment(seg = {}) {
+  const out = {};
+  for (const f of SEGMENT_FIELDS) if (Array.isArray(seg[f]) && seg[f].length) out[f] = seg[f].map(String).slice(0, 50);
+  if (seg.page) out.page = clean(seg.page, 200);
+  return out;
+}
+app.post('/api/sites/:id/estimate', auth, ownSite, wrap(async (req, res) => {
+  res.json({ count: await countAudience(req.site.id, normalizeSegment(req.body.segment)) });
+}));
+app.get('/api/sites/:id/campaigns', auth, ownSite, wrap(async (req, res) => {
+  res.json(await all('SELECT * FROM campaigns WHERE site_id=? ORDER BY id DESC LIMIT 100', [req.site.id]));
+}));
+app.post('/api/sites/:id/campaigns/:cid/cancel', auth, ownSite, wrap(async (req, res) => {
+  const result = await run("UPDATE campaigns SET status='cancelled' WHERE id=? AND site_id=? AND status='scheduled'",
+    [req.params.cid, req.site.id]);
+  if (!result.changes) return res.status(409).json({ error: 'Campaign is no longer scheduled' });
+  res.json({ ok: true });
+}));
+async function createCampaign(site, b, req) {
+  const title = clean(b.title, 120);
+  if (!title) throw httpErr(400, 'Title is required');
+  const body = clean(b.body, 400), url = clean(b.url, 1000), icon = clean(b.icon, 1000), image = clean(b.image, 1000), actionLabel = clean(b.action_label, 40);
+  if (![url, icon, image].every(isUrl)) throw httpErr(400, 'URLs must start with http:// or https://');
+  let scheduledAt = null;
+  if (b.scheduled_at) {
+    if (typeof b.scheduled_at !== 'string') throw httpErr(400, 'Choose a valid schedule time in the future');
+    if (process.env.VERCEL) {
+      throw httpErr(501, 'Scheduled campaigns require a persistent Node.js server and are unavailable on Vercel serverless deployments.');
+    }
+    scheduledAt = Date.parse(b.scheduled_at);
+    if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
+      throw httpErr(400, 'Choose a valid schedule time in the future');
+    }
+  }
+  const status = scheduledAt ? 'scheduled' : 'sending';
+  const { id } = await run('INSERT INTO campaigns(site_id,title,body,url,icon,image,action_label,segment,status,scheduled_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+    [site.id, title, body, url, icon, image, actionLabel, JSON.stringify(normalizeSegment(b.segment)), status, scheduledAt]);
+  if (scheduledAt) return get('SELECT * FROM campaigns WHERE id=?', [id]);
+  const job = sendCampaign(id, origin(req)).catch(async (e) => {
+    console.error('send failed', e); await run("UPDATE campaigns SET status='failed' WHERE id=?", [id]);
+  });
+  if (waitUntil) waitUntil(job);
+  else if (process.env.VERCEL) await job;
+  return get('SELECT * FROM campaigns WHERE id=?', [id]);
+}
+app.post('/api/sites/:id/campaigns', auth, ownSite, wrap(async (req, res) => res.json(await createCampaign(req.site, req.body, req))));
+
+// ---------- templates ----------
+app.get('/api/templates', auth, wrap(async (req, res) => res.json(await all('SELECT * FROM templates WHERE user_id=? ORDER BY id DESC', [req.user.id]))));
+app.post('/api/templates', auth, wrap(async (req, res) => {
+  const b = req.body, name = clean(b.name, 100), title = clean(b.title, 120);
+  if (!name || !title) return res.status(400).json({ error: 'Name and title are required' });
+  const { id } = await run('INSERT INTO templates(user_id,name,title,body,url,icon,image) VALUES(?,?,?,?,?,?,?)',
+    [req.user.id, name, title, clean(b.body, 400), clean(b.url, 1000), clean(b.icon, 1000), clean(b.image, 1000)]);
+  res.json({ id });
+}));
+app.delete('/api/templates/:tid', auth, wrap(async (req, res) => {
+  await run('DELETE FROM templates WHERE id=? AND user_id=?', [req.params.tid, req.user.id]); res.json({ ok: true });
+}));
+
+// ---------- developer REST API (x-api-key) ----------
+const apiKey = wrap(async (req, res, next) => {
+  const k = req.get('x-api-key') || req.query.api_key;
+  const site = k && await get('SELECT * FROM sites WHERE api_key=?', [String(k)]);
+  if (!site) return res.status(401).json({ error: 'Invalid API key' });
+  req.site = site; next();
+});
+app.post('/api/v1/send', apiKey, wrap(async (req, res) => {
+  const c = await createCampaign(req.site, req.body, req); res.json({ campaign_id: c.id, status: c.status });
+}));
+app.get('/api/v1/subscribers/count', apiKey, wrap(async (req, res) => {
+  res.json({ count: await countAudience(req.site.id, normalizeSegment(req.query)) });
+}));
+app.get('/api/v1/campaigns/:cid', apiKey, wrap(async (req, res) => {
+  const c = await get('SELECT id,title,status,total,sent,failed,clicks,created_at FROM campaigns WHERE id=? AND site_id=?', [req.params.cid, req.site.id]);
+  c ? res.json(c) : res.status(404).json({ error: 'Not found' });
+}));
+
+// ---------- public endpoints used by the embed script / service worker ----------
+const pub = cors({ origin: true });
+app.options('/public/*', pub);
+app.post('/public/permission-denied', pub, wrap(async (req, res) => {
+  const key = clean(req.body && req.body.key, 100);
+  const visitor = clean(req.body && req.body.visitor, 100);
+  const site = key && await get('SELECT * FROM sites WHERE site_key=?', [key]);
+  if (!site || !visitor) return res.status(400).json({ error: 'Invalid request' });
+  const ua = parseUA(req.get('user-agent') || '');
+  const country = (req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || req.get('x-country') || 'Unknown').toUpperCase();
+  await run(`INSERT INTO subscribers(site_id,endpoint,p256dh,auth,browser,os,device,country,language,page,permission,active)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,0) ON CONFLICT(site_id,endpoint) DO UPDATE SET
+    permission='denied', last_seen=CURRENT_TIMESTAMP, page=excluded.page`,
+    [site.id, 'denied:' + visitor, '', '', ua.browser, ua.os, ua.device, country, clean(req.body.language, 20), clean(req.body.page, 500), 'denied']);
+  res.json({ ok: true });
+}));
+app.post('/public/subscribe', pub, wrap(async (req, res) => {
+  const { key, subscription, page, language } = req.body || {};
+  const site = key && await get('SELECT * FROM sites WHERE site_key=?', [String(key)]);
+  const k = subscription && subscription.keys;
+  if (!site || !subscription || !subscription.endpoint || !k || !k.p256dh || !k.auth) return res.status(400).json({ error: 'Invalid request' });
+  const ua = parseUA(req.get('user-agent') || '');
+  const country = (req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || req.get('x-country') || 'Unknown').toUpperCase();
+  await run(`INSERT INTO subscribers(site_id,endpoint,p256dh,auth,browser,os,device,country,language,page)
+    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(site_id,endpoint) DO UPDATE SET active=1, last_seen=CURRENT_TIMESTAMP,
+    p256dh=excluded.p256dh, auth=excluded.auth, page=excluded.page`,
+    [site.id, clean(subscription.endpoint, 2000), k.p256dh, k.auth, ua.browser, ua.os, ua.device, country, clean(language, 20), clean(page, 500)]);
+  res.json({ ok: true });
+}));
+app.post('/public/unsubscribe', pub, wrap(async (req, res) => {
+  const { key, endpoint } = req.body || {};
+  const site = key && await get('SELECT id FROM sites WHERE site_key=?', [String(key)]);
+  if (site && endpoint) await run('UPDATE subscribers SET active=0 WHERE site_id=? AND endpoint=?', [site.id, String(endpoint)]);
+  res.json({ ok: true });
+}));
+app.post('/public/email-subscribe', pub, wrap(async (req, res) => {
+  const { key } = req.body || {};
+  const site = key && await get('SELECT id FROM sites WHERE site_key=?', [String(key)]);
+  const email = clean(req.body && req.body.email, 254).toLowerCase();
+  if (!site || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address' });
+  }
+  await run(`INSERT INTO email_subscribers(site_id,email,source) VALUES(?,?,?)
+    ON CONFLICT(site_id,email) DO UPDATE SET active=1, source=excluded.source`,
+    [site.id, email, clean(req.body && req.body.source, 100) || 'website-popup']);
+  res.json({ ok: true });
+}));
+app.post('/public/click/:cid', pub, wrap(async (req, res) => {
+  await run('UPDATE campaigns SET clicks=clicks+1 WHERE id=?', [req.params.cid]); res.json({ ok: true });
+}));
+
+// Embed script: <script src="https://panel/sdk/SITEKEY.js" async></script>
+app.get('/sdk/:key.js', cors(), wrap(async (req, res) => {
+  const site = await get('SELECT * FROM sites WHERE site_key=?', [req.params.key]);
+  if (!site) return res.status(404).type('application/javascript').send('console.error("PushDesk: unknown site key")');
+  res.type('application/javascript').set('Cache-Control', 'public, max-age=300').send(sdkSource(origin(req), site.site_key, getPublicKey()));
+}));
+function sdkSource(server, key, vapidPublicKey) {
+  return `(function(){
+var SERVER=${JSON.stringify(server)},KEY=${JSON.stringify(key)},VAPID=${JSON.stringify(vapidPublicKey)};
+var SW=(window.PUSHDESK_SW_PATH||'/pushdesk-sw.js');
+var PREVIEW=!!window.PUSHDESK_PREVIEW_PROMPT,DONE='pd_done_'+KEY;
+var LATER_COUNT='pd_later_count_'+KEY,NEXT_PROMPT='pd_next_prompt_'+KEY;
+var previousFocus=null,overlay=null;
+function b64(s){var p='='.repeat((4-s.length%4)%4),b=(s+p).replace(/-/g,'+').replace(/_/g,'/'),r=atob(b),o=new Uint8Array(r.length);for(var i=0;i<r.length;i++)o[i]=r.charCodeAt(i);return o;}
+function storageGet(key){try{return localStorage.getItem(key)}catch(e){return null}}
+function storageSet(key,value){try{localStorage.setItem(key,String(value))}catch(e){}}
+function storageRemove(key){try{localStorage.removeItem(key)}catch(e){}}
+function visitorId(){var id=storageGet('pd_visitor_'+KEY);if(!id){id=(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);storageSet('pd_visitor_'+KEY,id)}return id}
+function supported(){return 'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;}
+function post(path,data){return fetch(SERVER+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(async function(response){if(!response.ok){var result=await response.json().catch(function(){return {}});throw new Error(result.error||'Request failed')}return response.json()})}
+async function saveSubscription(sub){
+  await post('/public/subscribe',{key:KEY,subscription:sub.toJSON(),page:location.href,language:navigator.language});
+  storageSet(DONE,'1');
+  return sub;
+}
+async function subscribe(){
+  if(!supported())throw new Error('Push is not supported in this browser');
+  var perm=await Notification.requestPermission();if(perm!=='granted')throw new Error('Permission '+perm);
+  var reg=await navigator.serviceWorker.register(SW);await navigator.serviceWorker.ready;
+  var sub=await reg.pushManager.getSubscription()||await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64(VAPID)});
+  return saveSubscription(sub);
+}
+async function unsubscribe(){
+  var reg=await navigator.serviceWorker.getRegistration(SW);var sub=reg&&await reg.pushManager.getSubscription();if(!sub)return;
+  await post('/public/unsubscribe',{key:KEY,endpoint:sub.endpoint});
+  await sub.unsubscribe();try{localStorage.removeItem(DONE)}catch(e){}
+}
+function count(key){var n=Number(storageGet(key)||0);return Number.isFinite(n)?n:0}
+function setView(name){
+  overlay.querySelector('#pd-push-view').hidden=name!=='push';
+  overlay.hidden=false;document.body.style.overflow='hidden';
+  overlay.querySelector('#pd-allow').focus({preventScroll:true});
+}
+function close(){if(!overlay)return;overlay.hidden=true;document.body.style.overflow='';if(previousFocus&&previousFocus.focus)previousFocus.focus({preventScroll:true})}
+function defer(){
+  var amount=count(LATER_COUNT)+1;
+  storageSet(LATER_COUNT,amount);
+  if(amount>=3){storageRemove(LATER_COUNT);storageRemove(NEXT_PROMPT);close();return}
+  storageSet(NEXT_PROMPT,Date.now()+2000);
+  close();
+  window.setTimeout(banner,2000);
+}
+function makePopup(){
+  if(overlay)return;
+  var link=document.createElement('link');link.rel='stylesheet';link.href=SERVER+'/popup.css';link.dataset.pushdeskPopup='1';document.head.appendChild(link);
+  overlay=document.createElement('div');overlay.id='pushdesk-optin';overlay.className='pd-overlay';overlay.hidden=true;
+  overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-labelledby','pd-title');
+  overlay.innerHTML='<section class="pd-card"><button class="pd-close" id="pd-close" type="button" aria-label="Close popup">×</button>'+
+    '<div class="pd-view" id="pd-push-view"><div class="pd-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/><path d="M19 3l1.5-1.5M21 7h2"/></svg></div>'+
+    '<div class="pd-eyebrow"><span id="pd-site-name"></span> updates</div><h2 id="pd-title">Don\\u2019t Miss What\\u2019s New!</h2><p class="pd-subtitle">Stay updated with the latest news, useful updates and important announcements\\u2014delivered straight to your device.</p>'+
+    '<ul class="pd-benefits"><li><span class="pd-check">✓</span><span>Get important updates on time</span></li><li><span class="pd-check">✓</span><span>Be among the first to know what\\u2019s new</span></li><li><span class="pd-check">✓</span><span>Receive updates that matter to you</span></li></ul>'+
+    '<button class="pd-primary" id="pd-allow" type="button">🔔 Yes, Keep Me Updated</button><button class="pd-later" id="pd-later" type="button">Maybe Later</button>'+
+    '<p class="pd-privacy">Your choice matters. You can change notification settings in your browser anytime.</p><p class="pd-status" id="pd-push-status" aria-live="polite"></p></div></section>';
+  document.body.appendChild(overlay);overlay.querySelector('#pd-site-name').textContent=location.hostname;
+  overlay.querySelector('#pd-close').onclick=defer;
+  overlay.querySelector('#pd-later').onclick=defer;
+  overlay.addEventListener('click',function(event){if(event.target===overlay)defer()});
+  document.addEventListener('keydown',function(event){if(event.key==='Escape'&&!overlay.hidden)defer()});
+  overlay.querySelector('#pd-allow').onclick=async function(){
+    var status=overlay.querySelector('#pd-push-status'),button=this;
+    button.disabled=true;status.textContent='Connecting…';status.className='pd-status';
+    try{await subscribe();status.textContent='You\\u2019re subscribed. Thanks for staying connected!';status.className='pd-status success';window.setTimeout(close,1400)}
+    catch(error){if(error.message==='Permission denied'){post('/public/permission-denied',{key:KEY,visitor:visitorId(),page:location.href,language:navigator.language}).catch(function(){});status.textContent='Notifications are blocked. Click the lock/site icon in the address bar, change Notifications to Allow, then refresh this page.';status.className='pd-status error';return}status.textContent=error.message==='Permission default'?'Choose Allow in the browser notification prompt.':!supported()?'Push notifications are not supported in this browser.':'Could not complete the push subscription. Please try again.';status.className='pd-status error'}
+    finally{button.disabled=false}
+  };
+}
+async function checkAndShow(){
+  if(window.PUSHDESK_NO_PROMPT||(!PREVIEW&&storageGet(DONE)==='1'))return;
+  if(!PREVIEW&&'Notification' in window&&Notification.permission==='granted'){
+    try{var reg=await navigator.serviceWorker.getRegistration(SW),sub=reg&&await reg.pushManager.getSubscription();if(!sub)await subscribe();else await saveSubscription(sub)}catch(error){console.error('PushDesk: could not restore existing push subscription',error)}
+    return;
+  }
+  var amount=count(LATER_COUNT);
+  if(!PREVIEW&&amount>=3){storageRemove(LATER_COUNT);makePopup();previousFocus=document.activeElement;setView('push');return}
+  var nextAt=Number(storageGet(NEXT_PROMPT)||0);
+  if(!PREVIEW&&nextAt>Date.now()){window.setTimeout(banner,nextAt-Date.now());return}
+  makePopup();
+  previousFocus=document.activeElement;
+  setView('push');
+}
+window.PushDesk={subscribe:subscribe,unsubscribe:unsubscribe,supported:supported,showPrompt:function(){makePopup();previousFocus=document.activeElement;setView('push')}};
+function banner(){checkAndShow().catch(function(error){console.error('PushDesk popup failed:',error)})}
+var promptDelay=PREVIEW?500:4500;
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(banner,promptDelay)});else setTimeout(banner,promptDelay);
+})();`;
+}
+
+// Demo page so you can test end to end on the panel's own origin
+app.get('/demo/:key', (req, res) => {
+  const key = String(req.params.key).replace(/[^a-z0-9]/gi, '');
+  res.type('html').send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PushDesk demo</title><body style="font-family:system-ui;max-width:560px;margin:60px auto;padding:0 16px">
+<h2>PushDesk test page</h2><p>This page previews the push and email popup visitors see on your website. Choose a notification option or subscribe using the button below.</p>
+<button id="b" style="padding:10px 18px;font-size:16px;border-radius:8px;border:0;background:#4f46e5;color:#fff;cursor:pointer">Subscribe this browser</button>
+<button id="show" style="padding:10px 18px;font-size:16px;border-radius:8px;border:0;background:#eee;color:#111;cursor:pointer">Show popup again</button>
+<p id="m" style="color:#555"></p>
+<script>window.PUSHDESK_PREVIEW_PROMPT=true</script>
+<script src="/sdk/${key}.js?v=${Date.now()}"></script>
+<script>document.getElementById('b').onclick=()=>PushDesk.subscribe().then(()=>m.textContent='Subscribed. Send a campaign from the panel.').catch(e=>m.textContent='Error: '+e.message);document.getElementById('show').onclick=()=>PushDesk.showPrompt()</script>`);
+});
+
+// ---------- static panel (on Vercel the files in /public are served by the CDN instead) ----------
+app.use('/uploads', express.static(uploadDir, { immutable: true, maxAge: '1y', fallthrough: false }));
+if (!process.env.VERCEL) {
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.get('/app', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'app.html')));
+}
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(err.status || 500).json({ error: err.status ? err.message : 'Server error' });
+});
+
+module.exports = app;
+if (require.main === module) {
+  const port = process.env.PORT || 3000;
+  app.listen(port, () => {
+    console.log(`PushDesk running on http://localhost:${port}  (panel: /app)`);
+    const dispatchScheduledCampaigns = async () => {
+      await ready;
+      const due = await all("SELECT id FROM campaigns WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at LIMIT 10", [Date.now()]);
+      for (const campaign of due) {
+        const claimed = await run("UPDATE campaigns SET status='sending' WHERE id=? AND status='scheduled'", [campaign.id]);
+        if (!claimed.changes) continue;
+        const serverOrigin = (process.env.BASE_URL || `http://localhost:${port}`).replace(/\/$/, '');
+        sendCampaign(campaign.id, serverOrigin).catch(async (error) => {
+          console.error(`Scheduled campaign ${campaign.id} failed:`, error);
+          await run("UPDATE campaigns SET status='failed' WHERE id=? AND status='sending'", [campaign.id]);
+        }).catch((error) => console.error(`Could not update scheduled campaign ${campaign.id}:`, error));
+      }
+    };
+    const poll = () => dispatchScheduledCampaigns().catch((error) => console.error('Campaign scheduler failed:', error));
+    poll();
+    setInterval(poll, 5000).unref();
+  });
+}

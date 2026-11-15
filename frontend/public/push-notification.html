@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fffaf6">
+  <title>Push notifications — PageCrew</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body, main, iframe { width: 100%; height: 100%; margin: 0; }
+    body { background: #fffaf6; }
+    main { min-height: 100vh; min-height: 100dvh; }
+    iframe { display: block; border: 0; }
+    #handoff-status { display: grid; min-height: 100vh; min-height: 100dvh; place-items: center; padding: 24px; color: #526078; font: 500 15px/1.5 system-ui, sans-serif; text-align: center; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div id="handoff-status" role="status">Connecting to Push Pilot…</div>
+    <iframe
+      id="pushdesk-frame"
+      title="PushDesk notification dashboard"
+      loading="eager"
+      hidden></iframe>
+  </main>
+  <script>
+    const localHosts = ["localhost", "127.0.0.1"];
+    const serviceUrl = localHosts.includes(location.hostname)
+      ? "http://127.0.0.1:3000/app"
+      : "https://pagecrew-pushdesk.onrender.com/app";
+    const frame = document.getElementById("pushdesk-frame");
+    const status = document.getElementById("handoff-status");
+    window.addEventListener("message", (event) => {
+      if (event.source !== frame.contentWindow
+        || event.origin !== new URL(serviceUrl).origin
+        || !event.data
+        || !["pushpilot:logout", "pushpilot:switch-dashboard"].includes(event.data.type)) {
+        return;
+      }
+      if (event.data.type === "pushpilot:logout") {
+        window.location.replace("/dashboard-choice");
+      } else if (event.data.dashboard === "pagecrew") {
+        window.location.replace("/#dashboard");
+      }
+    });
+    (async () => {
+      try {
+        const response = await fetch("/api/auth/pushpilot-sso", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" }
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.token) {
+          throw new Error(result.error || "PageCrew could not create a sign-in link.");
+        }
+        frame.src = `${serviceUrl}#sso=${encodeURIComponent(result.token)}`;
+        frame.hidden = false;
+        status.hidden = true;
+      } catch {
+        status.textContent = "Could not open Push Pilot automatically. Return to the dashboard chooser and try again.";
+      }
+    })();
+  </script>
+</body>
+</html>

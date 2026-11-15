@@ -20,6 +20,10 @@ class PageCrewHandler(SimpleHTTPRequestHandler):
         route = urlsplit(self.path)
         if route.path.rstrip("/") == "/advanced-hybrid":
             self.path = "/advanced-hybrid.html" + (f"?{route.query}" if route.query else "")
+        elif route.path.rstrip("/") == "/dashboard-choice":
+            self.path = "/dashboard-choice.html" + (f"?{route.query}" if route.query else "")
+        elif route.path.rstrip("/") == "/push-notification":
+            self.path = "/push-notification.html" + (f"?{route.query}" if route.query else "")
         requested = (FRONTEND / urlsplit(self.path).path.lstrip("/")).resolve()
         if not requested.is_relative_to(FRONTEND.resolve()) or not requested.is_file():
             self.path = "/index.html"

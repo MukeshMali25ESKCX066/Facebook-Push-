@@ -17,6 +17,22 @@
       "destination": "/advanced-hybrid.html"
     },
     {
+      "source": "/dashboard-choice",
+      "destination": "/dashboard-choice.html"
+    },
+    {
+      "source": "/dashboard-choice/",
+      "destination": "/dashboard-choice.html"
+    },
+    {
+      "source": "/push-notification",
+      "destination": "/push-notification.html"
+    },
+    {
+      "source": "/push-notification/",
+      "destination": "/push-notification.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

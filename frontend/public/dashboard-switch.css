@@ -1,0 +1,79 @@
+.dashboard-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border: 1px solid #dfe6f0;
+  border-radius: 999px;
+  background: #fff;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+.dashboard-toggle-label {
+  color: #788399;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dashboard-toggle-label.is-current {
+  color: #273247;
+  font-weight: 750;
+}
+
+.dashboard-toggle-control {
+  display: inline-flex;
+  width: 42px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: #aab4c3;
+  cursor: pointer;
+  transition: background .18s ease;
+}
+
+.dashboard-toggle-control[aria-checked="true"] { background: #334f91; }
+
+.dashboard-toggle-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #17203340;
+  transition: transform .18s ease;
+}
+
+.dashboard-toggle-control[aria-checked="true"] .dashboard-toggle-thumb { transform: translateX(16px); }
+.dashboard-toggle-control:focus-visible { outline: 3px solid #7899e8; outline-offset: 3px; }
+
+@media (max-width: 760px) {
+  .app .main > .topbar {
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 14px;
+  }
+
+  .app .main > .topbar .topbar-actions {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .dashboard-toggle {
+    position: static;
+    flex: 0 0 100%;
+    justify-content: center;
+    margin: 0 auto;
+    transform: none;
+  }
+}

@@ -698,6 +698,14 @@ router.post("/login", async (req, res) => {
         res.status(403).json({ error: "Use the super admin sign-in page." });
         return;
     }
+    if (user.status !== "approved" && !user.isApproved) {
+        res.status(403).json({
+            error: user.status === "rejected"
+                ? "Your registration was not approved. Contact the super admin."
+                : "Your account is waiting for super admin approval."
+        });
+        return;
+    }
     const sessionId = ensureSessionId(req, res);
     const existingUserIds = authSessionStore.get(sessionId)?.userIds || [];
     const nextUserIds = [...new Set([...existingUserIds, user.id])];
@@ -797,8 +805,8 @@ router.post("/admin/login/verify", async (req, res) => {
 });
 function requireSignedInUser(req, res, next) {
     void getAuthenticatedUser(req).then((user) => {
-        if (!user) {
-            res.status(401).json({ error: "Sign in to continue." });
+        if (!user || (user.role !== "admin" && user.status !== "approved" && !user.isApproved)) {
+            res.status(401).json({ error: "An approved PageCrew account is required." });
             return;
         }
         res.locals.authUser = user;
@@ -808,7 +816,7 @@ function requireSignedInUser(req, res, next) {
 function requireSuperAdmin(req, res, next) {
     void getAuthenticatedUser(req).then((user) => {
         if (!user || user.role !== "admin") {
-            res.status(403).json({ error: "Only the super admin can manage payment settings and reviews." });
+            res.status(403).json({ error: "Only the super admin can manage user approvals." });
             return;
         }
         res.locals.authUser = user;
@@ -1171,11 +1179,12 @@ router.post("/admin/approve-user", async (req, res) => {
         res.status(404).json({ error: "User not found." });
         return;
     }
-    const selectedPlan = exports.paymentPlans.find((plan) => plan.id === targetUser.planId);
-    const verifiedSubmission = targetUser.paymentStatus === "pending" && Boolean(selectedPlan && selectedPlan.price > 0 && targetUser.paymentProofPath && targetUser.paymentReference && targetUser.paymentPayerName);
-    const freeDemoSubmission = targetUser.paymentStatus === "not_required" && selectedPlan?.id === "demo" && selectedPlan.price === 0;
-    if (!verifiedSubmission && !freeDemoSubmission) {
-        res.status(400).json({ error: "Payment must be submitted and verified before approving this account." });
+    if (targetUser.role === "admin") {
+        res.status(400).json({ error: "Super admin accounts cannot be approved as user registrations." });
+        return;
+    }
+    if (targetUser.status === "approved" || targetUser.isApproved) {
+        res.status(409).json({ error: "This account is already approved." });
         return;
     }
     if (pool) {
@@ -1303,6 +1312,30 @@ router.post("/active", async (req, res) => {
     }
     const account = getFacebookAccount(accountId, sessionId);
     res.json({ activeAccountId: account.id, name: account.name, accounts: listFacebookAccounts(sessionId) });
+});
+router.post("/pushpilot-sso", requireSignedInUser, (req, res) => {
+    const secret = (process.env.PAGECREW_SSO_SECRET || "").trim();
+    if (Buffer.byteLength(secret) < 32) {
+        res.status(503).json({ error: "Push Pilot single sign-on is not configured." });
+        return;
+    }
+    const user = res.locals.authUser;
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({
+        iss: "pagecrew",
+        aud: "pushpilot",
+        typ: "pagecrew-sso",
+        sub: user.id,
+        email: user.email,
+        name: user.name,
+        jti: (0, node_crypto_1.randomUUID)(),
+        iat: issuedAt,
+        exp: issuedAt + 60
+    })).toString("base64url");
+    const signingInput = `${header}.${payload}`;
+    const signature = (0, node_crypto_1.createHmac)("sha256", secret).update(signingInput).digest("base64url");
+    res.json({ token: `${signingInput}.${signature}` });
 });
 router.post("/logout", async (req, res) => {
     const sessionId = getAuthSessionId(req);

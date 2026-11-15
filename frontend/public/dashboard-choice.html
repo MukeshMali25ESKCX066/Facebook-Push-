@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>Choose your dashboard — PageCrew</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #172033;
+      background: #f5f7fb;
+    }
+    * { box-sizing: border-box; }
+    body { min-width: 320px; min-height: 100vh; margin: 0; }
+    main { display: grid; min-height: 100vh; place-items: center; padding: 24px; }
+    .card {
+      width: min(100%, 680px);
+      padding: clamp(24px, 6vw, 48px);
+      border: 1px solid #e1e7f0;
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 24px 70px rgb(25 40 70 / 10%);
+    }
+    .brand { color: #263a63; font-size: 15px; font-weight: 800; text-decoration: none; }
+    .eyebrow { margin: 38px 0 8px; color: #526b9a; font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+    h1 { margin: 0; font-size: clamp(28px, 6vw, 40px); letter-spacing: -.04em; }
+    .description { margin: 12px 0 28px; color: #657189; line-height: 1.6; }
+    .choices { display: grid; gap: 12px; }
+    .choice {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 88px;
+      padding: 18px;
+      border: 1px solid #dfe6f0;
+      border-radius: 16px;
+      color: inherit;
+      text-decoration: none;
+      transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+    }
+    .choice:hover { transform: translateY(-1px); border-color: #708ac2; box-shadow: 0 8px 24px rgb(25 40 70 / 8%); }
+    .choice:focus-visible { outline: 3px solid #7899e8; outline-offset: 3px; }
+    .choice-mark {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      flex: 0 0 48px;
+      place-items: center;
+      border-radius: 14px;
+      background: #edf2ff;
+      color: #304f91;
+      font-weight: 800;
+    }
+    .choice:last-child .choice-mark { background: #fff1e8; color: #a64b13; }
+    .choice-copy { display: grid; gap: 4px; }
+    .choice-copy strong { font-size: 16px; }
+    .choice-copy span { color: #657189; font-size: 14px; line-height: 1.45; }
+    .arrow { margin-left: auto; color: #667793; font-size: 22px; }
+    .status, .error { color: #657189; font-size: 14px; line-height: 1.5; }
+    .error { color: #a52e32; }
+    .login-link { display: inline-block; margin-top: 16px; color: #304f91; font-weight: 700; }
+    [hidden] { display: none !important; }
+    @media (max-width: 480px) {
+      main { padding: 14px; }
+      .card { border-radius: 18px; }
+      .choice { gap: 12px; padding: 14px; }
+      .choice-mark { width: 42px; height: 42px; flex-basis: 42px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card" aria-labelledby="heading">
+      <a class="brand" href="/">PageCrew</a>
+      <p class="eyebrow">WORKSPACE</p>
+      <h1 id="heading">Choose your dashboard</h1>
+      <p class="description">Select where you want to continue.</p>
+      <p class="status" id="status" role="status">Verifying your PageCrew session…</p>
+      <div class="choices" id="choices" hidden>
+        <a class="choice" id="pagecrew-choice" href="/#dashboard">
+          <span class="choice-mark" aria-hidden="true">PC</span>
+          <span class="choice-copy">
+            <strong>PageCrew</strong>
+            <span>Open your social publishing workspace.</span>
+          </span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </a>
+        <a class="choice" id="pushpilot-choice" href="/push-notification">
+          <span class="choice-mark" aria-hidden="true">PP</span>
+          <span class="choice-copy">
+            <strong>Push Pilot</strong>
+            <span>Open the push notification dashboard.</span>
+          </span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </a>
+      </div>
+      <div class="error" id="error" role="alert" hidden>
+        <p>PageCrew could not verify your session. Check your connection and try again.</p>
+        <a class="login-link" href="/login">Return to login</a>
+      </div>
+    </section>
+  </main>
+  <script>
+    (async () => {
+      const status = document.getElementById("status");
+      const choices = document.getElementById("choices");
+      const pageCrewChoice = document.getElementById("pagecrew-choice");
+      const pushPilotChoice = document.getElementById("pushpilot-choice");
+      const showSignInChoices = (message) => {
+        status.textContent = message;
+        status.hidden = false;
+        choices.hidden = false;
+        pageCrewChoice.href = "/login";
+        pushPilotChoice.href = "/login";
+      };
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store", credentials: "include" });
+        if (response.status === 401) {
+          showSignInChoices("Sign in to PageCrew to continue. After login, select your dashboard again.");
+          return;
+        }
+        if (!response.ok) throw new Error("PageCrew session verification failed.");
+        const result = await response.json();
+        const user = result.user;
+        if (!user) {
+          showSignInChoices("Sign in to PageCrew to continue. After login, select your dashboard again.");
+          return;
+        }
+        if (user.role === "admin") {
+          window.location.replace("/suuperadmin");
+          return;
+        }
+        if (user.status !== "approved" && !user.isApproved && !user.approved) {
+          showSignInChoices("Your PageCrew account needs super admin approval before you can open a dashboard.");
+          return;
+        }
+        status.hidden = true;
+        choices.hidden = false;
+      } catch {
+        status.hidden = true;
+        document.getElementById("error").hidden = false;
+      }
+    })();
+  </script>
+</body>
+</html>
