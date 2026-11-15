@@ -73,6 +73,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
     assert.equal(campaign.timezone, "Asia/Kolkata");
     assert.deepEqual(campaign.pages, []);
     assert.deepEqual(campaign.articleUrls, []);
+    assert.deepEqual(campaign.descriptionImageIds, []);
+    assert.equal(campaign.descriptionImagePoolIds, null);
 
     pages.pageMetadata[pages.pageTokenKey("account:workspace-a", "page-a")] = {
         id: "page-a",
@@ -482,6 +484,8 @@ test("creates draft campaigns and isolates them by workspace", async t => {
                     "Second post https://example.com/second",
                     "Third post"
                 ],
+                descriptionImageIds: [selectedImages[0], "", ""],
+                descriptionImagePoolIds: selectedImages.slice(1),
                 currentStep: 4
             })
         });
@@ -489,6 +493,15 @@ test("creates draft campaigns and isolates them by workspace", async t => {
         const savedDescriptions = await descriptionOnlySaved.json();
         assert.deepEqual(savedDescriptions.descriptionLinks, ["", "https://example.com/second", ""]);
         assert.equal(savedDescriptions.manualPostDescriptions.length, 3);
+        assert.deepEqual(savedDescriptions.descriptionImageIds, [selectedImages[0], "", ""]);
+        assert.deepEqual(savedDescriptions.descriptionImagePoolIds, selectedImages.slice(1));
+
+        const invalidDescriptionImages = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ descriptionImagePoolIds: ["not-a-workspace-image"] })
+        });
+        assert.equal(invalidDescriptionImages.status, 400);
 
         const descriptionOnlyStartAt = dateTimeAfterDays(3, "09:00");
         const descriptionOnlyEndAt = dateTimeAfterDays(6, "09:00");
@@ -508,6 +521,18 @@ test("creates draft campaigns and isolates them by workspace", async t => {
             })
         });
         assert.equal(descriptionOnlySettings.status, 200);
+        const schedulePreservedAfterImageSave = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+                descriptionImageIds: [selectedImages[0], "", ""],
+                descriptionImagePoolIds: selectedImages.slice(1)
+            })
+        });
+        assert.equal(schedulePreservedAfterImageSave.status, 200);
+        const savedImageSchedule = await schedulePreservedAfterImageSave.json();
+        assert.equal(savedImageSchedule.publishingSettings.enabled, true);
+        assert.equal(savedImageSchedule.startDate, descriptionOnlyStartAt.slice(0, 10));
 
         const descriptionReadinessResponse = await fetch(`${baseUrl}/api/automatic-campaigns/${descriptionOnlyCampaign.id}/readiness`, { headers });
         assert.equal(descriptionReadinessResponse.status, 200);
@@ -537,6 +562,12 @@ test("creates draft campaigns and isolates them by workspace", async t => {
             "https://example.com/second",
             "",
             ""
+        ]);
+        assert.deepEqual(descriptionActivation.schedule.posts.map(post => post.imageUrl), [
+            `/api/media-library/${selectedImages[0]}/file`,
+            `/api/media-library/${selectedImages[1]}/file`,
+            `/api/media-library/${selectedImages[2]}/file`,
+            `/api/media-library/${selectedImages[0]}/file`
         ]);
     } finally {
         aiContent.generateContent = originalGenerateContent;

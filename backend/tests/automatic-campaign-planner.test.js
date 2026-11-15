@@ -573,3 +573,77 @@ test("rotates numbered descriptions by Page and slot, then starts again at the f
         }
     }
 });
+
+test("prioritizes fixed description images and cycles the rotating pool only after using every image", () => {
+    const campaign = {
+        campaignName: "Description image campaign",
+        descriptionModeEnabled: true,
+        manualPostDescriptions: ["First", "Second", "Third"],
+        descriptionLinks: ["", "", ""],
+        descriptionImageIds: ["", "fixed-image", ""],
+        descriptionImagePoolIds: ["pool-image-1", "pool-image-2"],
+        pages: [pages[0]],
+        articleUrls: [],
+        imageIds: [],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-18T09:00",
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } },
+        scheduleDays: {
+            Sunday: { enabled: true, times: ["09:00"] },
+            Monday: { enabled: true, times: ["09:00"] },
+            Tuesday: { enabled: true, times: ["09:00"] },
+            Wednesday: { enabled: true, times: ["09:00"] }
+        }
+    }, [pages[0]]);
+    const schedule = generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    });
+
+    assert.deepEqual(schedule.posts.map(post => post.libraryImageId), [
+        "pool-image-1",
+        "fixed-image",
+        "pool-image-2",
+        "pool-image-1"
+    ]);
+});
+
+test("rejects a rotating image pool that cannot fit posts without fixed images", () => {
+    const campaign = {
+        campaignName: "Insufficient description image slots",
+        descriptionModeEnabled: true,
+        manualPostDescriptions: ["First", "Second", "Third"],
+        descriptionLinks: ["", "", ""],
+        descriptionImageIds: ["", "fixed-image", ""],
+        descriptionImagePoolIds: ["pool-image-1", "pool-image-2", "pool-image-3", "pool-image-4"],
+        pages: [pages[0]],
+        articleUrls: [],
+        imageIds: [],
+        aiContent: []
+    };
+    const settings = validatePublishingSettings({
+        enabled: true,
+        timezone: "UTC",
+        startAt: "2026-11-15T09:00",
+        endAt: "2026-11-18T09:00",
+        pageSettings: { "page-a": { intervalMinutes: 60, dailyPostLimit: 1 } },
+        scheduleDays: {
+            Sunday: { enabled: true, times: ["09:00"] },
+            Monday: { enabled: true, times: ["09:00"] },
+            Tuesday: { enabled: true, times: ["09:00"] },
+            Wednesday: { enabled: true, times: ["09:00"] }
+        }
+    }, [pages[0]]);
+
+    assert.throws(() => generateAutomaticSchedule({
+        campaign,
+        settings,
+        now: Date.parse("2026-11-14T00:00:00.000Z")
+    }), /bulk image pool has 1 image\(s\) that will not fit the schedule/);
+});

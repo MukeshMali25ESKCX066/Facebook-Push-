@@ -214,6 +214,33 @@ function validateManualDescriptions(campaign) {
     return { manualPostDescriptions, descriptionLinks };
 }
 
+function normalizeDescriptionImageIds(workspaceScopeId, value, descriptionCount) {
+    if (!Array.isArray(value) || value.length > 200) {
+        throw new Error("Provide up to one image for each description.");
+    }
+    const imageIds = value.length ? value : Array(descriptionCount).fill("");
+    if (imageIds.length !== descriptionCount) {
+        throw new Error("Description images must match the numbered description list.");
+    }
+    return imageIds.map((value, index) => {
+        const imageId = String(value || "").trim();
+        if (!imageId) return "";
+        const validatedId = mediaLibrary.validateImageIds(workspaceScopeId, [imageId])[0];
+        const image = mediaLibrary.findImage(workspaceScopeId, validatedId);
+        if (!image || !existsSync(mediaLibrary.getImageFilePath(image))) {
+            throw new Error(`The image for description ${index + 1} is unavailable. Reupload it or remove it.`);
+        }
+        return validatedId;
+    });
+}
+
+function descriptionImagePoolIds(campaign, workspaceScopeId) {
+    const selectedIds = Array.isArray(campaign.descriptionImagePoolIds)
+        ? campaign.descriptionImagePoolIds
+        : campaign.imageIds || [];
+    return mediaLibrary.validateImageIds(workspaceScopeId, selectedIds);
+}
+
 function getScheduleCampaign(campaign, workspaceScopeId) {
     const availableImages = (campaign.imageIds || [])
         .map(id => mediaLibrary.findImage(workspaceScopeId, id))
@@ -222,20 +249,33 @@ function getScheduleCampaign(campaign, workspaceScopeId) {
     const selectedPages = campaign.pages || [];
     if (campaign.descriptionModeEnabled === true) {
         const description = validateManualDescriptions(campaign);
+        const selectedPoolIds = descriptionImagePoolIds(campaign, workspaceScopeId);
+        const descriptionImageIds = normalizeDescriptionImageIds(
+            workspaceScopeId,
+            campaign.descriptionImageIds || [],
+            description.manualPostDescriptions.length
+        );
+        for (const imageId of [...selectedPoolIds, ...descriptionImageIds].filter(Boolean)) {
+            const image = mediaLibrary.findImage(workspaceScopeId, imageId);
+            if (!image || !existsSync(mediaLibrary.getImageFilePath(image))) {
+                throw new Error("A description image is unavailable. Reupload it or remove it from this campaign.");
+            }
+        }
         const articleUrls = [...new Set(description.descriptionLinks.filter(Boolean))]
             .map(url => ({ url, status: "Ready" }));
         return {
             ...campaign,
             ...description,
+            descriptionImagePoolIds: selectedPoolIds,
+            descriptionImageIds,
             articleUrls,
-            imageIds: availableImages.map(image => image.id),
             resourceAssignments: description.manualPostDescriptions.map((_text, roundIndex) => ({
                 roundIndex,
                 assignments: selectedPages.map((page, index) => ({
                     pageId: String(page.id),
                     pageName: String(page.name || ""),
                     articleUrl: description.descriptionLinks[roundIndex],
-                    imageId: availableImages[index % Math.max(availableImages.length, 1)]?.id || "",
+                    imageId: descriptionImageIds[roundIndex] || "",
                     roundIndex
                 }))
             })),
@@ -293,6 +333,9 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     let articlesReady = false;
     let descriptionReady = false;
     let descriptionSettings = null;
+    let selectedDescriptionPoolIds = [];
+    let fixedDescriptionImageIds = [];
+    let descriptionImageError = "";
     let articlesMessage = "Add at least one valid public article URL.";
     let descriptionMessage = "Add at least one description to publish.";
     try {
@@ -312,31 +355,55 @@ function getActivationReadiness(campaign, workspaceScopeId, now = Date.now()) {
     if (descriptionMode) check("Repeating description", descriptionReady, descriptionMessage);
     else check("Article URLs", articlesReady, articlesMessage);
 
+    if (descriptionMode && descriptionReady) {
+        try {
+            selectedDescriptionPoolIds = descriptionImagePoolIds(campaign, workspaceScopeId);
+            fixedDescriptionImageIds = normalizeDescriptionImageIds(
+                workspaceScopeId,
+                campaign.descriptionImageIds || [],
+                descriptionSettings.manualPostDescriptions.length
+            );
+            for (const imageId of [...selectedDescriptionPoolIds, ...fixedDescriptionImageIds].filter(Boolean)) {
+                const image = mediaLibrary.findImage(workspaceScopeId, imageId);
+                if (!image || !existsSync(mediaLibrary.getImageFilePath(image))) {
+                    throw new Error("A selected image is unavailable. Reupload it or remove it from this campaign.");
+                }
+            }
+        } catch (error) {
+            descriptionImageError = error.message;
+        }
+    }
+    if (descriptionMode) {
+        const selectedCount = selectedDescriptionPoolIds.length +
+            fixedDescriptionImageIds.filter(Boolean).length;
+        check("Description images", !descriptionImageError, descriptionImageError ||
+            (selectedCount
+                ? `${selectedDescriptionPoolIds.length} rotating image(s) and ${fixedDescriptionImageIds.filter(Boolean).length} description-specific image(s) selected. Every rotating image must fit a scheduled post.`
+                : "Images are optional. Upload a fixed image per description or add a rotating image folder."));
+    }
+
     const selectedImageCount = (campaign.imageIds || []).length;
     const availableImageCount = (campaign.imageIds || []).filter(id => {
         const image = mediaLibrary.findImage(workspaceScopeId, id);
         return image && existsSync(mediaLibrary.getImageFilePath(image));
     }).length;
-    check("Campaign images", true, availableImageCount
-        ? `${availableImageCount} optional image(s) are available.`
-        : selectedImageCount
-            ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
-            : descriptionMode
-                ? descriptionSettings?.descriptionLinks.some(Boolean)
-                    ? "No images selected; links found in descriptions will be included in the Facebook posts."
-                    : "No images selected; descriptions without links will publish as text posts."
+    check("Campaign images", true, descriptionMode
+        ? "Fixed and rotating Description images are checked separately."
+        : availableImageCount
+            ? `${availableImageCount} optional image(s) are available.`
+            : selectedImageCount
+                ? "Selected images are unavailable; the campaign can still publish clickable article links without images."
                 : "No images selected; posts will link directly to the article.");
     const previewConfigurationReady = !campaign.sharedPreviewEnabled || sharedPreviewStore.isConfigured();
     const sharedPreviewReady = !campaign.sharedPreviewEnabled ||
-        (availableImageCount > 0 && previewConfigurationReady &&
-        (!descriptionMode || descriptionSettings?.descriptionLinks.every(Boolean)));
+        (!descriptionMode && availableImageCount > 0 && previewConfigurationReady);
     check("Clickable custom-image previews", sharedPreviewReady,
         !campaign.sharedPreviewEnabled
             ? "Off. Selected images use the existing publishing behavior."
+            : descriptionMode
+                ? "Turn off custom-image previews in Description mode; description links use Facebook's standard link preview."
             : !availableImageCount
                 ? "Select at least one available image to use custom-image preview links."
-                : descriptionMode && !descriptionSettings?.descriptionLinks.every(Boolean)
-                    ? "Add one public link to every description or turn off custom-image previews."
                 : previewConfigurationReady
                     ? "On. Selected images will appear in preview links and visitors will be redirected to the article."
                     : "Configure PostgreSQL, Cloudflare R2, and the HTTPS preview and media domains on the backend.");
@@ -711,6 +778,8 @@ router.post("/", (req, res) => {
         pages: [],
         articleUrls: [],
         imageIds: [],
+        descriptionImageIds: [],
+        descriptionImagePoolIds: null,
         sharedPreviewEnabled: false,
         descriptionModeEnabled: false,
         manualPostDescriptions: [],
@@ -745,7 +814,7 @@ router.patch("/:id", (req, res) => {
         return;
     }
     if (["active", "paused", "scheduled"].includes(campaign.status) &&
-        ["pages", "articleUrls", "imageIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled", "descriptionModeEnabled", "manualPostDescriptions", "manualPostDescription", "descriptionLink"]
+        ["pages", "articleUrls", "imageIds", "descriptionImageIds", "descriptionImagePoolIds", "commonHashtags", "aiSettings", "publishingSettings", "currentStep", "sharedPreviewEnabled", "descriptionModeEnabled", "manualPostDescriptions", "manualPostDescription", "descriptionLink"]
             .some(key => Object.prototype.hasOwnProperty.call(req.body || {}, key))) {
         return res.status(409).json({ error: "Pause and stop this campaign before changing its Pages, content, resources, or publishing settings." });
     }
@@ -795,6 +864,32 @@ router.patch("/:id", (req, res) => {
             updates.descriptionLink = descriptionLink
                 ? validateArticleUrls([{ url: descriptionLink }])[0].url
                 : "";
+        }
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "descriptionImagePoolIds")) {
+            updates.descriptionImagePoolIds = mediaLibrary.validateImageIds(
+                req.workspaceScopeId,
+                req.body.descriptionImagePoolIds
+            );
+        }
+        const descriptionCount = Array.isArray(updates.manualPostDescriptions)
+            ? updates.manualPostDescriptions.length
+            : Array.isArray(campaign.manualPostDescriptions) && campaign.manualPostDescriptions.length
+                ? campaign.manualPostDescriptions.length
+                : campaign.manualPostDescription ? 1 : 0;
+        if (Object.prototype.hasOwnProperty.call(req.body || {}, "descriptionImageIds")) {
+            updates.descriptionImageIds = normalizeDescriptionImageIds(
+                req.workspaceScopeId,
+                req.body.descriptionImageIds,
+                descriptionCount
+            );
+        } else if (Object.prototype.hasOwnProperty.call(req.body || {}, "manualPostDescriptions") &&
+            Array.isArray(campaign.descriptionImageIds) &&
+            campaign.descriptionImageIds.length !== descriptionCount) {
+            updates.descriptionImageIds = normalizeDescriptionImageIds(
+                req.workspaceScopeId,
+                [],
+                descriptionCount
+            );
         }
         if (updates.descriptionModeEnabled ?? campaign.descriptionModeEnabled) {
             Object.assign(updates, validateManualDescriptions({ ...campaign, ...updates }));

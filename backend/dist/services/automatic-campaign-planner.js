@@ -201,6 +201,21 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
         ? campaign.descriptionLinks
         : manualPostDescriptions.map(description =>
             (description.match(/https?:\/\/[^\s<>"')\]]+/i) || [""])[0].replace(/[.,;:!?]+$/, ""));
+    const rawDescriptionImageIds = Array.isArray(campaign.descriptionImageIds)
+        ? campaign.descriptionImageIds
+        : [];
+    if (descriptionMode && rawDescriptionImageIds.length &&
+        rawDescriptionImageIds.length !== manualPostDescriptions.length) {
+        throw new Error("Description images must match the numbered description list.");
+    }
+    const descriptionImageIds = descriptionMode
+        ? manualPostDescriptions.map((_description, index) => String(rawDescriptionImageIds[index] || ""))
+        : [];
+    const descriptionImagePool = descriptionMode
+        ? [...new Set((Array.isArray(campaign.descriptionImagePoolIds)
+            ? campaign.descriptionImagePoolIds
+            : campaign.imageIds || []).map(String))]
+        : [];
     const pageIds = new Set(campaignPages.map(page => String(page.id)));
     const articleUrls = new Set((campaign.articleUrls || []).map(article => String(article.url)));
     const imageIds = new Set((campaign.imageIds || []).map(String));
@@ -215,7 +230,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                     pageId: String(page.id),
                     pageName: String(page.name || ""),
                     articleUrl: String(descriptionLinks[roundIndex] || ""),
-                    imageId: campaign.imageIds?.[index % Math.max(campaign.imageIds.length, 1)] || "",
+                    imageId: descriptionImageIds[roundIndex] || "",
                     roundIndex
                 }))
             }))
@@ -238,11 +253,16 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             if (!descriptionMode && (campaign.articleUrls || []).length >= campaignPages.length && assignedUrls.has(assignment.articleUrl)) {
                 throw new Error("Each Page must receive a unique URL within a matching round when enough URLs are selected.");
             }
-            if (assignment.imageId && (campaign.imageIds || []).length >= campaignPages.length && assignedImages.has(assignment.imageId)) {
+            if (!descriptionMode && assignment.imageId &&
+                (campaign.imageIds || []).length >= campaignPages.length && assignedImages.has(assignment.imageId)) {
                 throw new Error("Each Page must receive a unique image within a matching round when enough images are selected.");
             }
+            const expectedDescriptionImageId = descriptionMode
+                ? descriptionImageIds[Number(round.roundIndex)] || ""
+                : "";
             if ((!descriptionMode && !articleUrls.has(String(assignment.articleUrl))) ||
-                (assignment.imageId && !imageIds.has(String(assignment.imageId)))) {
+                (descriptionMode && String(assignment.imageId || "") !== expectedDescriptionImageId) ||
+                (!descriptionMode && assignment.imageId && !imageIds.has(String(assignment.imageId)))) {
                 throw new Error("The matching plan references a URL or image that is no longer selected.");
             }
             assignedPages.add(String(assignment.pageId));
@@ -285,6 +305,7 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
                 id: randomUUID(),
                 pageId: assignment.pageId,
                 pageName: assignment.pageName,
+                roundIndex: descriptionIndex,
                 caption: manualPostDescriptions[descriptionIndex],
                 cta: "",
                 hashtags: [],
@@ -440,6 +461,25 @@ function generateAutomaticSchedule({ campaign, settings, now = Date.now() }) {
             : left.pageOrder - right.pageOrder || left.roundIndex - right.roundIndex;
         return pageOrder || left.contentId.localeCompare(right.contentId);
     });
+    if (descriptionMode && descriptionImagePool.length) {
+        const pinnedImageIds = new Set(descriptionImageIds.filter(Boolean));
+        const rotatingImageIds = descriptionImagePool.filter(imageId => !pinnedImageIds.has(imageId));
+        let rotatingImageIndex = 0;
+        for (const post of posts) {
+            const pinnedImageId = descriptionImageIds[post.roundIndex] || "";
+            if (pinnedImageId) {
+                post.libraryImageId = pinnedImageId;
+            } else if (rotatingImageIds.length) {
+                post.libraryImageId = rotatingImageIds[rotatingImageIndex % rotatingImageIds.length];
+                rotatingImageIndex += 1;
+            }
+        }
+        const scheduledImageIds = new Set(posts.map(post => post.libraryImageId).filter(Boolean));
+        const unusedImageIds = descriptionImagePool.filter(imageId => !scheduledImageIds.has(imageId));
+        if (unusedImageIds.length) {
+            throw new Error(`The bulk image pool has ${unusedImageIds.length} image(s) that will not fit the schedule. Add more schedule slots or remove images.`);
+        }
+    }
     return {
         settings: {
             campaignName: campaign.campaignName,

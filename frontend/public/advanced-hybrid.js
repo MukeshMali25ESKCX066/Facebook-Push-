@@ -401,13 +401,28 @@
     }
   }
 
-  function renderManualPostPreviews(campaign, description) {
+  function getDescriptionImagePoolIds(campaign) {
+    if (Array.isArray(state.descriptionSettingsDraft?.descriptionImagePoolIds)) {
+      return state.descriptionSettingsDraft.descriptionImagePoolIds;
+    }
+    if (Array.isArray(campaign.descriptionImagePoolIds)) return campaign.descriptionImagePoolIds;
+    return campaign.imageIds || [];
+  }
+
+  function getDescriptionImageIds(campaign, descriptionCount) {
+    const savedIds = state.descriptionSettingsDraft?.descriptionImageIds ||
+      campaign.descriptionImageIds || [];
+    return Array.from({ length: descriptionCount }, (_value, index) => savedIds[index] || "");
+  }
+
+  function renderManualPostPreviews(campaign, description, descriptionImageId = "") {
     const link = descriptionLinkForPreview(description);
     const captionText = String(description || "")
       .replace(/https?:\/\/[^\s<>"')\]]+/gi, "")
       .trim();
     const caption = buildPreviewCaption({ caption: captionText, hashtags: [] }, campaign.commonHashtags);
-    const image = state.imageAssets.find(item => item.id === campaign.imageIds?.[0]);
+    const previewImageId = descriptionImageId || getDescriptionImagePoolIds(campaign)[0] || campaign.imageIds?.[0];
+    const image = state.imageAssets.find(item => item.id === previewImageId);
     const destination = link
       ? `<a class="ah-social-destination" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(new URL(link).hostname)}</a>`
       : "";
@@ -443,12 +458,18 @@
     const enabled = form.querySelector("#ah-description-mode-toggle").checked;
     const descriptionInputs = [...form.querySelectorAll("[data-manual-description]")];
     const savedDescriptions = state.descriptionSettingsDraft?.manualPostDescriptions ||
-      getCampaignDescriptions(campaign);
+      (Array.isArray(campaign.manualPostDescriptions)
+        ? campaign.manualPostDescriptions
+        : campaign.manualPostDescription ? [campaign.manualPostDescription] : []);
     return {
       descriptionModeEnabled: enabled,
       manualPostDescriptions: enabled || descriptionInputs.length
         ? descriptionInputs.map(input => input.value)
-        : savedDescriptions
+        : savedDescriptions,
+      descriptionImageIds: enabled || descriptionInputs.length
+        ? [...form.querySelectorAll("[data-description-image-id]")].map(input => input.value)
+        : getDescriptionImageIds(campaign, savedDescriptions.length),
+      descriptionImagePoolIds: getDescriptionImagePoolIds(campaign)
     };
   }
 
@@ -457,7 +478,10 @@
     state.descriptionSettingsDraft = settings;
     for (const input of form.querySelectorAll("[data-manual-description]")) {
       const preview = form.querySelector(`[data-description-preview="${input.dataset.manualDescription}"]`);
-      if (preview) preview.innerHTML = renderManualPostPreviews(getActiveCampaign(), input.value);
+      if (preview) {
+        const imageId = form.querySelector(`[data-description-image-id="${input.dataset.manualDescription}"]`)?.value || "";
+        preview.innerHTML = renderManualPostPreviews(getActiveCampaign(), input.value, imageId);
+      }
     }
   }
 
@@ -492,7 +516,7 @@
     return descriptions;
   }
 
-  function renderDescriptionEntries(campaign, descriptions) {
+  function renderDescriptionEntries(campaign, descriptions, descriptionImageIds) {
     return descriptions.map((description, index) => `
       <article class="ah-description-entry">
         <div class="ah-description-entry-heading">
@@ -505,8 +529,42 @@
           Description text
           <textarea id="ah-manual-post-description-${index}" data-manual-description="${index}" aria-label="Description ${index + 1}" rows="5" maxlength="5000" placeholder="Enter description ${index + 1}. A link in this text is detected automatically." required>${escapeHtml(description)}</textarea>
         </label>
-        <div data-description-preview="${index}">${renderManualPostPreviews(campaign, description)}</div>
+        <input type="hidden" data-description-image-id="${index}" value="${escapeHtml(descriptionImageIds[index] || "")}">
+        <div class="ah-description-image-control">
+          <div>${state.imageAssets.find(image => image.id === descriptionImageIds[index])
+            ? `<img class="ah-description-image-thumbnail" src="${escapeHtml(state.imageAssets.find(image => image.id === descriptionImageIds[index]).url)}" alt="Image for description ${index + 1}">`
+            : `<span class="ah-help-text">No fixed image selected. The rotating folder pool will be used.</span>`}</div>
+          <div class="ah-description-image-actions">
+            <label class="ah-button ah-button-secondary ah-file-button">Upload fixed image<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" data-description-image-file="${index}"></label>
+            ${descriptionImageIds[index]
+              ? `<button type="button" class="ah-button ah-button-danger" data-ah-action="clear-description-image" data-description-index="${index}">Remove image</button>`
+              : ""}
+          </div>
+        </div>
+        <div data-description-preview="${index}">${renderManualPostPreviews(campaign, description, descriptionImageIds[index])}</div>
       </article>`).join("");
+  }
+
+  function renderDescriptionImagePool(campaign, poolIds) {
+    const images = poolIds.map(id => state.imageAssets.find(image => image.id === id)).filter(Boolean);
+    return `
+      <section class="ah-description-image-pool">
+        <div>
+          <h3>Bulk folder image pool</h3>
+          <p>Images rotate through scheduled posts without reuse until the pool cycles. A fixed image above takes priority. Scheduling is blocked if every pool image cannot fit the available posts.</p>
+        </div>
+        <div class="ah-description-image-actions">
+          <label class="ah-button ah-button-secondary ah-file-button">Upload image folder<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" data-description-image-pool webkitdirectory directory multiple></label>
+          ${poolIds.length
+            ? `<button type="button" class="ah-button ah-button-danger" data-ah-action="clear-description-image-pool">Clear folder pool</button>`
+            : ""}
+        </div>
+        <p class="ah-help-text">${poolIds.length} image${poolIds.length === 1 ? "" : "s"} in the rotating pool${images.length < poolIds.length ? ` · ${poolIds.length - images.length} currently unavailable` : ""}.</p>
+        ${images.length
+          ? `<div class="ah-description-pool-grid">${images.map(image => `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.originalName || "Pool image")}" title="${escapeHtml(image.originalName || "Pool image")}">`).join("")}</div>`
+          : ""}
+        ${state.imageLoadError ? `<p class="ah-error">${escapeHtml(state.imageLoadError)}</p>` : ""}
+      </section>`;
   }
 
   function renderDescriptionSettings() {
@@ -523,6 +581,8 @@
     const descriptions = settings.manualPostDescriptions?.length
       ? settings.manualPostDescriptions
       : [""];
+    const descriptionImageIds = getDescriptionImageIds(campaign, descriptions.length);
+    const descriptionImagePool = getDescriptionImagePoolIds(campaign);
     root.innerHTML = `
       ${state.workflowMessage ? `<div class="ah-notice" role="status">${escapeHtml(state.workflowMessage)}</div>` : ""}
       <section class="ah-panel ah-workflow-panel">
@@ -537,7 +597,8 @@
             <p>When on, numbered descriptions rotate across Pages and schedule slots. Article URLs and AI captions aren’t required. Any link in a description is detected automatically.</p>
           </section>
           ${enabled ? `
-            <div class="ah-description-list">${renderDescriptionEntries(campaign, descriptions)}</div>
+            ${renderDescriptionImagePool(campaign, descriptionImagePool)}
+            <div class="ah-description-list">${renderDescriptionEntries(campaign, descriptions, descriptionImageIds)}</div>
             <div class="ah-import-controls">
               <button type="button" class="ah-button ah-button-secondary" data-ah-action="add-description">Add Description</button>
               <label class="ah-button ah-button-secondary ah-file-button">Import numbered .txt<input id="ah-description-file" type="file" accept=".txt,text/plain"></label>
@@ -812,7 +873,7 @@
           ${descriptions.map((description, index) => `
             <details class="ah-description-preview-details">
               <summary>Description ${index + 1}</summary>
-              ${renderManualPostPreviews(campaign, description)}
+              ${renderManualPostPreviews(campaign, description, getDescriptionImageIds(campaign, descriptions.length)[index])}
             </details>`).join("")}
           <button type="button" class="ah-button ah-button-secondary" data-ah-action="post-description">Edit Description</button>
         </section>`;
@@ -1444,7 +1505,9 @@
         descriptionModeEnabled: updated.descriptionModeEnabled === true,
         manualPostDescriptions: Array.isArray(updated.manualPostDescriptions)
           ? updated.manualPostDescriptions
-          : updated.manualPostDescription ? [updated.manualPostDescription] : []
+          : updated.manualPostDescription ? [updated.manualPostDescription] : [],
+        descriptionImageIds: updated.descriptionImageIds || [],
+        descriptionImagePoolIds: updated.descriptionImagePoolIds || []
       };
       state.workflowMessage = updated.descriptionModeEnabled
         ? "Repeating description saved. Configure or keep the campaign schedule, then review it."
@@ -1471,7 +1534,9 @@
       const descriptions = parseNumberedDescriptions(await file.text());
       state.descriptionSettingsDraft = {
         descriptionModeEnabled: true,
-        manualPostDescriptions: descriptions
+        manualPostDescriptions: descriptions,
+        descriptionImageIds: Array(descriptions.length).fill(""),
+        descriptionImagePoolIds: getDescriptionImagePoolIds(getActiveCampaign())
       };
       state.workflowMessage = `Loaded ${descriptions.length} numbered description(s). This replaced the previous list; save to keep the import.`;
       renderDescriptionSettings();
@@ -1547,6 +1612,7 @@
       state.imageLoadError = error.message;
     }
     if (state.currentView === "image-library") renderImageLibrary();
+    else if (state.currentView === "post-description") renderDescriptionSettings();
     else if (state.currentView === "smart-matching") renderSmartMatching();
     else if (state.currentView === "ai-settings") renderAiSettings();
     else if (state.currentView === "post-preview") renderPostPreview();
@@ -1559,22 +1625,28 @@
     };
   }
 
-  async function uploadImageFiles(files) {
+  function renderImageUploadContext() {
+    if (state.currentView === "image-library") renderImageLibrary();
+    else if (state.currentView === "post-description") renderDescriptionSettings();
+  }
+
+  async function uploadImageFiles(files, onUploaded) {
     const supported = files.filter(file => /\.(?:jpe?g|png|webp)$/i.test(file.name));
     let skipped = files.length - supported.length;
     if (!supported.length) {
       state.workflowMessage = "The selected folder has no JPG, PNG, or WEBP images.";
-      renderImageLibrary();
+      renderImageUploadContext();
       return;
     }
     const maxImages = state.imageLimits.maxImages || 500;
     if (state.imageTotal + supported.length > maxImages) {
       state.workflowMessage = `This upload would exceed the ${maxImages}-image workspace limit.`;
-      renderImageLibrary();
+      renderImageUploadContext();
       return;
     }
     const { category, tags } = getImageUploadDetails();
-    let uploaded = 0;
+    let uploadedImages = [];
+    let uploadError = "";
     try {
       for (let offset = 0; offset < supported.length; offset += 10) {
         const batch = supported.slice(offset, offset + 10);
@@ -1586,22 +1658,67 @@
           formData.append("files", file, file.name);
         }
         state.workflowMessage = `Uploading images ${Math.min(offset + batch.length, supported.length)} of ${supported.length}…`;
-        renderImageLibrary();
+        renderImageUploadContext();
         const result = await request("/api/media-library/upload", { method: "POST", body: formData });
-        uploaded += (result.images || []).length;
+        uploadedImages = [...uploadedImages, ...(result.images || [])];
         skipped += Number(result.skipped || 0);
         state.imageAssets = [...(result.images || []), ...state.imageAssets];
         state.imageTotal = Number(result.total || state.imageTotal + (result.images || []).length);
         state.imageTotalBytes += (result.images || []).reduce((total, image) => total + image.size, 0);
       }
-      state.workflowMessage = `${uploaded} image${uploaded === 1 ? "" : "s"} uploaded.${skipped ? ` ${skipped} unsupported folder file${skipped === 1 ? " was" : "s were"} skipped.` : ""}`;
     } catch (error) {
       await loadImageLibrary();
-      state.workflowMessage = uploaded
-        ? `${uploaded} images uploaded before the next batch failed: ${error.message}`
-        : error.message;
+      uploadError = error.message;
     }
-    if (state.currentView === "image-library") renderImageLibrary();
+    if (uploadedImages.length && onUploaded) {
+      await onUploaded(uploadedImages, uploadError);
+    } else {
+      state.workflowMessage = uploadError
+        ? uploadedImages.length
+          ? `${uploadedImages.length} images uploaded before the next batch failed: ${uploadError}`
+          : uploadError
+        : `${uploadedImages.length} image${uploadedImages.length === 1 ? "" : "s"} uploaded.${skipped ? ` ${skipped} unsupported folder file${skipped === 1 ? " was" : "s were"} skipped.` : ""}`;
+    }
+    renderImageUploadContext();
+  }
+
+  async function uploadDescriptionImages(files, descriptionIndex = null) {
+    const campaign = getActiveCampaign();
+    if (!campaign) return;
+    const campaignId = campaign.id;
+    await uploadImageFiles(files, (images, uploadError) => {
+      if (state.activeCampaignId !== campaignId) {
+        state.workflowMessage = "Images were uploaded to the library, but the selected campaign changed. Select them from the correct campaign before saving.";
+        return;
+      }
+      const form = root.querySelector("#ah-description-settings-form");
+      const settings = form
+        ? collectDescriptionSettings(form)
+        : state.descriptionSettingsDraft || {
+            descriptionModeEnabled: campaign.descriptionModeEnabled === true,
+            manualPostDescriptions: Array.isArray(campaign.manualPostDescriptions)
+              ? campaign.manualPostDescriptions.slice()
+              : campaign.manualPostDescription ? [campaign.manualPostDescription] : [],
+            descriptionImageIds: campaign.descriptionImageIds || [],
+            descriptionImagePoolIds: getDescriptionImagePoolIds(campaign)
+          };
+      if (descriptionIndex === null) {
+        settings.descriptionImagePoolIds = [...new Set([
+          ...(settings.descriptionImagePoolIds || []),
+          ...images.map(image => image.id)
+        ])];
+      } else if (settings.manualPostDescriptions[descriptionIndex] !== undefined) {
+        settings.descriptionImageIds = getDescriptionImageIds(campaign, settings.manualPostDescriptions.length);
+        settings.descriptionImageIds[descriptionIndex] = images[0].id;
+      } else {
+        state.workflowMessage = "The description list changed while uploading. The uploaded image remains in the media library; upload it again for the selected description.";
+        return;
+      }
+      state.descriptionSettingsDraft = settings;
+      state.workflowMessage = descriptionIndex === null
+        ? `${images.length} folder image${images.length === 1 ? "" : "s"} added to the rotating pool.${uploadError ? ` A later batch failed: ${uploadError}` : ""} Save Description Settings to persist.`
+        : `Image attached to Description ${descriptionIndex + 1}.${uploadError ? ` A later batch failed: ${uploadError}` : ""} Save Description Settings to persist.`;
+    });
   }
 
   async function uploadImageZip(file) {
@@ -1969,7 +2086,10 @@
     else if (view === "campaign-manager") renderCampaignManager(notice);
     else if (view === "facebook-pages") void loadFacebookPages();
     else if (view === "url-library") renderUrlLibrary();
-    else if (view === "post-description") renderDescriptionSettings();
+    else if (view === "post-description") {
+      renderDescriptionSettings();
+      void loadImageLibrary();
+    }
     else if (view === "image-library") void loadImageLibrary();
     else if (view === "smart-matching") {
       renderSmartMatching();
@@ -2151,6 +2271,7 @@
       if (form) {
         const settings = collectDescriptionSettings(form);
         settings.manualPostDescriptions.push("");
+        settings.descriptionImageIds.push("");
         state.descriptionSettingsDraft = settings;
         state.workflowMessage = "";
         renderDescriptionSettings();
@@ -2159,9 +2280,29 @@
       const form = root.querySelector("#ah-description-settings-form");
       if (form) {
         const settings = collectDescriptionSettings(form);
-        settings.manualPostDescriptions.splice(Number(control.dataset.descriptionIndex), 1);
+        const index = Number(control.dataset.descriptionIndex);
+        settings.manualPostDescriptions.splice(index, 1);
+        settings.descriptionImageIds.splice(index, 1);
         state.descriptionSettingsDraft = settings;
         state.workflowMessage = "";
+        renderDescriptionSettings();
+      }
+    } else if (action === "clear-description-image") {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) {
+        const settings = collectDescriptionSettings(form);
+        settings.descriptionImageIds[Number(control.dataset.descriptionIndex)] = "";
+        state.descriptionSettingsDraft = settings;
+        state.workflowMessage = "Fixed image removed. Save Description Settings to keep this change.";
+        renderDescriptionSettings();
+      }
+    } else if (action === "clear-description-image-pool") {
+      const form = root.querySelector("#ah-description-settings-form");
+      if (form) {
+        const settings = collectDescriptionSettings(form);
+        settings.descriptionImagePoolIds = [];
+        state.descriptionSettingsDraft = settings;
+        state.workflowMessage = "Folder image pool cleared. Save Description Settings to keep this change.";
         renderDescriptionSettings();
       }
     } else if (action === "save-image-metadata") {
@@ -2269,6 +2410,15 @@
       void importDescriptionFile(file);
     } else if (target.id === "ah-url-file" && target.files[0]) {
       void importArticleFile(target.files[0]);
+    } else if (target.matches("[data-description-image-file]") && target.files[0]) {
+      const file = target.files[0];
+      const index = Number(target.dataset.descriptionImageFile);
+      target.value = "";
+      void uploadDescriptionImages([file], index);
+    } else if (target.matches("[data-description-image-pool]") && target.files.length) {
+      const files = [...target.files];
+      target.value = "";
+      void uploadDescriptionImages(files);
     } else if ((target.id === "ah-image-files" || target.id === "ah-image-folder") && target.files.length) {
       const files = [...target.files];
       target.value = "";
