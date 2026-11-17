@@ -44,12 +44,20 @@
             <select id="site-picker" aria-label="Select website"><option value="">Loading websites…</option></select>
           </label>
           <div class="dashboard-toggle" role="group" aria-label="Switch dashboard">
-            <span class="dashboard-toggle-label">PageCrew</span>
+            <span class="dashboard-toggle-label">
+              <span class="dashboard-platform-icon dashboard-platform-facebook" aria-hidden="true">f</span>
+              PageCrew
+            </span>
             <button id="switch-dashboard" class="dashboard-toggle-control" type="button" role="switch"
-              aria-checked="true" aria-label="Switch from Push Pilot to PageCrew">
+              aria-checked="true" aria-label="Switch from LaraPush to PageCrew">
               <span class="dashboard-toggle-thumb"></span>
             </button>
-            <span class="dashboard-toggle-label is-current" aria-current="page">Push Pilot</span>
+            <span class="dashboard-toggle-label is-current" aria-current="page">
+              <svg class="dashboard-platform-icon dashboard-platform-bell" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
+              </svg>
+              LaraPush
+            </span>
           </div>
           <div id="nav" class="account-menu"></div>
         </div>

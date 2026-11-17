@@ -51,7 +51,28 @@ function renderNav() {
   document.body.classList.toggle('auth-mode', !S.token);
   nav.innerHTML = S.token ? `<div class="account-avatar">${esc((S.email || 'U').slice(0, 1).toUpperCase())}</div>
     <div class="account-info">${esc(S.email)}<small>Workspace owner</small></div><button class="btn sec sm" id="lo">Log out</button>` : '';
-  const lo = $('#lo'); if (lo) lo.onclick = logout;
+  const lo = $('#lo'); if (lo) lo.onclick = showLogoutConfirmation;
+}
+function showLogoutConfirmation() {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'logout-dialog';
+  dialog.setAttribute('aria-labelledby', 'lara-logout-title');
+  dialog.setAttribute('aria-describedby', 'lara-logout-description');
+  dialog.innerHTML = `<span class="logout-dialog-icon" aria-hidden="true">↪</span>
+    <h2 id="lara-logout-title">Log out of LaraPush?</h2>
+    <p id="lara-logout-description">You will be signed out of your PageCrew workspace on this device.</p>
+    <div class="logout-dialog-actions">
+      <button class="btn sec" type="button" data-cancel-logout>Cancel</button>
+      <button class="btn danger" type="button" data-confirm-logout>Log out</button>
+    </div>`;
+  document.body.appendChild(dialog);
+  const close = () => { if (dialog.open) dialog.close(); dialog.remove(); };
+  dialog.querySelector('[data-cancel-logout]').onclick = close;
+  dialog.querySelector('[data-confirm-logout]').onclick = () => { close(); logout(); };
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) close(); });
+  dialog.addEventListener('cancel', () => dialog.remove());
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else dialog.setAttribute('open', '');
 }
 function setActiveNav(route) {
   document.querySelectorAll('.nav-link').forEach((link) => {

@@ -28,7 +28,30 @@
     const serviceUrl = `${location.origin}/pushpilot/app.html`;
     const frame = document.getElementById("pushdesk-frame");
     const status = document.getElementById("handoff-status");
-    window.addEventListener("message", (event) => {
+    async function terminatePageCrewSession() {
+      status.hidden = false;
+      status.textContent = "Signing out of PageCrew and LaraPush…";
+      frame.hidden = true;
+      try {
+        const response = await fetch("/api/auth/logout", {
+          method: "POST",
+          credentials: "include"
+        });
+        if (!response.ok && response.status !== 401) {
+          throw new Error("PageCrew could not end the session. Please try again.");
+        }
+        window.location.replace("/login");
+      } catch (error) {
+        status.textContent = `Could not securely log out: ${error.message}`;
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Try again";
+        retry.addEventListener("click", terminatePageCrewSession, { once: true });
+        status.appendChild(document.createElement("br"));
+        status.appendChild(retry);
+      }
+    }
+    window.addEventListener("message", async (event) => {
       if (event.source !== frame.contentWindow
         || event.origin !== new URL(serviceUrl).origin
         || !event.data
@@ -36,7 +59,7 @@
         return;
       }
       if (event.data.type === "pushpilot:logout") {
-        window.location.replace("/login");
+        await terminatePageCrewSession();
       } else if (event.data.dashboard === "pagecrew") {
         window.location.replace("/legacy#dashboard");
       }

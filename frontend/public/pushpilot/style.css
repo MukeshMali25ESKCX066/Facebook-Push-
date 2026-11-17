@@ -50,6 +50,21 @@ button { cursor: pointer; }
 .dashboard-toggle-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #17203340; transition: transform .18s ease; }
 .dashboard-toggle-control[aria-checked="true"] .dashboard-toggle-thumb { transform: translateX(16px); }
 .dashboard-toggle-control:focus-visible { outline: 3px solid #7899e8; outline-offset: 3px; }
+.dashboard-toggle { border-color: #cda8ff; background: linear-gradient(110deg, #1268ee, #8515d4); box-shadow: 0 5px 18px #7337dc45, 0 0 0 4px #b88aff1c; }
+.dashboard-toggle-label, .dashboard-toggle-label.is-current { display: inline-flex; align-items: center; gap: 7px; color: #fff; }
+.dashboard-toggle-label:not(.is-current) { opacity: .8; }
+.dashboard-platform-icon { display: inline-grid; width: 19px; height: 19px; flex: 0 0 19px; place-items: center; }
+.dashboard-platform-facebook { border-radius: 50%; background: #fff; color: #1877f2; font: 800 16px/1 Arial, sans-serif; }
+.dashboard-platform-bell { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.dashboard-toggle-control { background: #ffffff72; }
+.dashboard-toggle-label.is-current { padding: 5px 8px; border-radius: 999px; background: #ffffff22; box-shadow: inset 0 0 0 1px #ffffff35; font-weight: 800; }
+
+.logout-dialog { width: min(420px, calc(100vw - 32px)); max-width: none; padding: 26px; border: 1px solid #e8e1f3; border-radius: 20px; background: #fff; color: #191936; box-shadow: 0 24px 80px #17133145; }
+.logout-dialog::backdrop { background: #15132c80; backdrop-filter: blur(3px); }
+.logout-dialog h2 { margin: 0 0 8px; color: #191936; font-size: 20px; }
+.logout-dialog p { margin: 0; color: #77758f; font-size: 13px; line-height: 1.6; }
+.logout-dialog-icon { display: grid; width: 42px; height: 42px; margin-bottom: 15px; place-items: center; border-radius: 13px; background: #fff1f0; color: #d83a38; font-size: 22px; font-weight: 800; }
+.logout-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; }
 .site-picker-wrap { display: flex; height: 36px; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: #515c71; }
 .picker-icon { color: var(--primary); font-size: 17px; }
 .site-picker-wrap select { width: 155px; padding: 0 20px 0 0; border: 0; outline: 0; background: transparent; color: inherit; font-size: 12px; }

@@ -1,0 +1,354 @@
+.app .topbar-actions > .account-chip {
+  display: none;
+}
+
+.app .pc-header-profile,
+.app .pc-notification-wrap {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.app .pc-profile-button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #1b1b40;
+  cursor: pointer;
+  text-align: left;
+}
+
+.app .pc-profile-button:hover .pc-profile-identity strong {
+  color: #5b38c5;
+}
+
+.app .pc-profile-avatar {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid #d5c9f8;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #f3edff, #d7c7ff);
+  color: #5836bb;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.app .pc-profile-identity {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.app .pc-profile-identity strong,
+.app .pc-profile-identity small {
+  overflow: hidden;
+  max-width: 145px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .pc-profile-identity strong {
+  color: #191936;
+  font-size: 12px;
+}
+
+.app .pc-profile-identity small {
+  color: #77758f;
+  font-size: 10px;
+}
+
+.app .pc-profile-chevron {
+  color: #686487;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.app .pc-notification-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid #e8e1f3;
+  border-radius: 12px;
+  background: #fff;
+  color: #59429b;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.app .pc-notification-button:hover {
+  transform: translateY(-1px);
+  border-color: #bca8ee;
+  background: #f7f2ff;
+}
+
+.app .pc-notification-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.app .pc-profile-menu,
+.app .pc-notification-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 100;
+  width: 230px;
+  overflow: hidden;
+  border: 1px solid #e7e0f2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 16px 38px #21184424;
+}
+
+.app .pc-profile-menu[hidden],
+.app .pc-notification-panel[hidden] {
+  display: none;
+}
+
+.app .pc-profile-menu-identity {
+  display: grid;
+  gap: 4px;
+  padding: 14px 15px 12px;
+  border-bottom: 1px solid #eee9f5;
+}
+
+.app .pc-profile-menu-identity strong {
+  overflow: hidden;
+  color: #191936;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .pc-profile-menu-identity small {
+  overflow: hidden;
+  color: #77758f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app .pc-profile-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 39px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border: 0;
+  background: #fff;
+  color: #282647;
+  cursor: pointer;
+  font: 600 12px/1.35 "DM Sans", "Segoe UI", sans-serif;
+  text-align: left;
+  text-decoration: none;
+}
+
+.app .pc-profile-menu-item:hover {
+  background: #f6f2ff;
+  color: #5231bf;
+}
+
+.app .pc-profile-menu-item[data-profile-action="logout"] {
+  color: #d83a38;
+}
+
+.app .pc-profile-menu-item[data-profile-action="logout"]:hover {
+  background: #fff1f0;
+  color: #b72422;
+}
+
+.app .pc-profile-menu-divider {
+  height: 1px;
+  margin: 3px 0;
+  background: #eee9f5;
+}
+
+.app .pc-notification-panel {
+  width: 260px;
+  padding: 17px;
+  color: #6d6a86;
+  font-size: 12px;
+  text-align: center;
+}
+
+.pc-confirm-dialog {
+  position: fixed;
+  width: min(420px, calc(100vw - 32px));
+  max-width: none;
+  padding: 26px;
+  border: 1px solid #e8e1f3;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 24px 80px #17133145;
+  color: #191936;
+}
+
+.pc-confirm-dialog::backdrop {
+  background: #15132c80;
+  backdrop-filter: blur(3px);
+}
+
+.pc-confirm-dialog:not([open]) {
+  display: none;
+}
+
+.pc-dialog-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 15px;
+  place-items: center;
+  border-radius: 13px;
+  background: #fff1f0;
+  color: #d83a38;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.pc-confirm-dialog h2 {
+  margin: 0 0 8px;
+  color: #191936;
+  font: 800 20px Manrope, sans-serif;
+}
+
+.pc-confirm-dialog > p {
+  margin: 0;
+  color: #77758f;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.pc-confirm-dialog .pc-dialog-error {
+  margin-top: 12px;
+  color: #bc302d;
+  font-size: 12px;
+}
+
+.pc-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 23px;
+}
+
+.pc-dialog-actions button,
+.pc-account-dialog > button {
+  min-height: 39px;
+  padding: 0 14px;
+  border: 1px solid #e5dfef;
+  border-radius: 10px;
+  background: #fff;
+  color: #474460;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pc-dialog-actions .pc-dialog-confirm,
+.pc-account-dialog > button {
+  border-color: #d63e3b;
+  background: #d63e3b;
+  color: #fff;
+}
+
+.pc-dialog-actions .pc-dialog-confirm:hover {
+  background: #b92b29;
+}
+
+.pc-account-dialog .pc-account-details {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 9px 16px;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid #eee9f5;
+  border-radius: 12px;
+  background: #fbf9ff;
+  font-size: 12px;
+}
+
+.pc-account-details span {
+  color: #77758f;
+}
+
+.pc-account-details strong {
+  overflow-wrap: anywhere;
+  color: #252344;
+  text-align: right;
+}
+
+.pc-account-details .pc-account-status {
+  color: #20855a;
+}
+
+.pc-account-dialog > button {
+  display: block;
+  margin-left: auto;
+  border-color: #6540d2;
+  background: #6540d2;
+}
+
+.app .pc-account-highlight {
+  outline: 3px solid #b8a0f4;
+  outline-offset: 3px;
+}
+
+.app .topbar-actions > .pc-notification-wrap {
+  order: 1;
+}
+
+.app .topbar-actions > .pc-header-profile {
+  order: 0;
+}
+
+@media (max-width: 900px) {
+  .app .pc-profile-identity,
+  .app .pc-profile-chevron {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .app .topbar {
+    height: auto;
+    min-height: 60px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .app .topbar-actions {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .app .dashboard-toggle {
+    position: static;
+    flex: 0 0 100%;
+    justify-content: center;
+    margin: 0 auto;
+    transform: none;
+  }
+
+  .app .pc-profile-menu {
+    right: -52px;
+  }
+}
